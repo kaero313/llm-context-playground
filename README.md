@@ -26,6 +26,8 @@ http://127.0.0.1:8765
 
 기본 실행은 `mock` mode입니다. 실제 LLM API 비용 없이 deterministic mock provider로 context 구성과 평가 흐름을 학습할 수 있습니다.
 
+서버가 정상 실행되면 터미널에 `LLM Context Playground UI running at http://127.0.0.1:8765` 형식의 메시지가 출력됩니다.
+
 ## UI 학습 흐름
 
 1. **프롬프트 입력**: 학습 케이스를 고르고 사용자 질문을 수정합니다.
