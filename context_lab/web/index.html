@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LLM Context Playground</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <aside class="side-nav" aria-label="LLM Context Playground navigation">
+      <div class="brand">
+        <div>
+          <h1>LLM Context Playground</h1>
+          <p>LLM 맥락 실험 플레이그라운드</p>
+        </div>
+      </div>
+
+      <nav class="tab-list" aria-label="학습 탭">
+        <button class="tab-button active" data-tab="simulator" type="button">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 6h7" />
+            <path d="M15 6h5" />
+            <path d="M11 4v4" />
+            <path d="M4 12h3" />
+            <path d="M11 12h9" />
+            <path d="M7 10v4" />
+            <path d="M4 18h10" />
+            <path d="M18 18h2" />
+            <path d="M14 16v4" />
+          </svg>
+          <span>실험하기</span>
+        </button>
+        <button class="tab-button" data-tab="comparison" type="button">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 19V9" />
+            <path d="M12 19V5" />
+            <path d="M19 19v-7" />
+            <path d="M3 19h18" />
+          </svg>
+          <span>결과 비교</span>
+        </button>
+        <button class="tab-button" data-tab="calculator" type="button">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 5h16" />
+            <path d="M4 12h16" />
+            <path d="M4 19h16" />
+            <path d="M8 3v4" />
+            <path d="M15 10v4" />
+            <path d="M11 17v4" />
+          </svg>
+          <span>맥락 분석</span>
+        </button>
+        <button class="tab-button" data-tab="learning" type="button">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 19.5V5a2 2 0 0 1 2-2h5v16H6a2 2 0 0 0-2 2" />
+            <path d="M20 19.5V5a2 2 0 0 0-2-2h-5v16h5a2 2 0 0 1 2 2" />
+          </svg>
+          <span>캡처 노트</span>
+        </button>
+      </nav>
+    </aside>
+
+    <main class="main-shell">
+      <header class="top-bar">
+        <div>
+          <p id="breadcrumb" class="breadcrumb">LLM Context Playground / 실험하기</p>
+          <h2 id="pageTitle">실험하기</h2>
+          <p id="pageSubtitle">프롬프트, 맥락 유지 개수, 압축 전략, KV 캐시 사용 방식을 바꿔 보며 결과를 비교합니다.</p>
+        </div>
+        <div class="top-actions">
+          <span id="serverStatus" class="status-chip">Mock mode</span>
+          <span id="caseStatus" class="status-chip">로딩 중</span>
+        </div>
+      </header>
+
+      <section id="view-simulator" class="tab-view active">
+        <div class="page-grid simulator-grid">
+          <section class="content-block span-8">
+            <div class="section-header">
+              <div>
+                <h3>1. 프롬프트 입력</h3>
+                <p>케이스를 고르고, 모델에 실제로 보낼 사용자 질문을 수정해 보세요.</p>
+              </div>
+              <button id="restorePromptButton" class="ghost-button" type="button">기본 질문 복원</button>
+            </div>
+            <div class="prompt-grid">
+              <label class="field">
+                <span>학습 케이스</span>
+                <select id="caseSelect"></select>
+              </label>
+              <label class="field prompt-field">
+                <span>실험 프롬프트</span>
+                <textarea id="promptInput" rows="5" spellcheck="false"></textarea>
+              </label>
+            </div>
+          </section>
+
+          <section class="content-block span-4">
+            <div class="section-header compact">
+              <div>
+                <h3>답변 유지 조건</h3>
+                <p>답변에 남아야 할 근거와 노출되면 안 되는 정보를 확인합니다.</p>
+              </div>
+            </div>
+            <p id="caseNotes" class="helper-text"></p>
+            <div id="experimentChecklist" class="checklist"></div>
+          </section>
+
+          <section class="content-block span-12 experiment-controls">
+            <div class="section-header">
+              <div>
+                <h3>2. 맥락 전략 설정</h3>
+                <p>최근 대화 유지, 압축 방식, 검색 근거, KV 캐시를 바꾸며 실험합니다.</p>
+              </div>
+            </div>
+            <div class="learning-controls-grid">
+              <label class="field">
+                <span>최근 대화 유지</span>
+                <select id="retentionTurns">
+                  <option value="0">유지하지 않음</option>
+                  <option value="2">최근 2개 메시지</option>
+                  <option value="4" selected>최근 4개 메시지</option>
+                  <option value="8">최근 8개 메시지</option>
+                  <option value="999">전체 대화</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>압축 전략</span>
+                <select id="compressionMode">
+                  <option value="none">압축 없음</option>
+                  <option value="summary">요약 압축</option>
+                  <option value="structured">구조화 상태</option>
+                  <option value="hybrid" selected>하이브리드</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>검색 근거</span>
+                <select id="retrievalMode">
+                  <option value="off">끄기</option>
+                  <option value="on" selected>RAG 켜기</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>KV 캐시</span>
+                <select id="kvCacheMode">
+                  <option value="off">사용 안 함</option>
+                  <option value="static" selected>정적 prefix 캐시</option>
+                  <option value="conversation">대화 prefix 캐시</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>최대 입력 token</span>
+                <input id="maxTokens" type="number" min="120" step="50" value="900" />
+              </label>
+              <label class="field">
+                <span>답변 예약 token</span>
+                <input id="reservedTokens" type="number" min="20" step="20" value="200" />
+              </label>
+              <div class="control-actions learning-actions">
+                <button id="runButton" class="run-button" type="button">
+                  <span>실험 실행</span>
+                  <strong>결과 다시 계산</strong>
+                </button>
+                <button id="resetBudgetButton" class="ghost-button" type="button">기본값으로 초기화</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="content-block span-12">
+            <div class="section-header compact">
+              <div>
+                <h3>3. 최종 API 입력 프롬프트</h3>
+                <p>현재 설정으로 API에 전달되는 최종 context 입력입니다. 모델이 실제로 보게 되는 내용을 여기서 확인합니다.</p>
+              </div>
+              <span id="apiPromptStats" class="status-chip">-</span>
+            </div>
+            <pre id="apiPromptPreview" class="api-prompt-preview"></pre>
+          </section>
+
+          <section class="content-block span-8">
+            <div class="section-header">
+              <div>
+                <h3>4. 모델 답변</h3>
+                <p>최종 프롬프트를 보냈다고 가정했을 때의 mock 답변과 주요 비용 지표입니다.</p>
+              </div>
+              <span id="selectedScenarioChip" class="status-chip">현재 설정</span>
+            </div>
+            <div id="currentResult" class="answer-panel"></div>
+          </section>
+
+          <section class="content-block span-4">
+            <div class="section-header compact">
+              <div>
+                <h3>5. 답변 분석</h3>
+                <p>답변이 필수 근거를 유지했고, 민감 정보를 차단했는지 확인합니다.</p>
+              </div>
+            </div>
+            <div id="answerRequirementStatus" class="requirement-list"></div>
+          </section>
+
+          <section class="content-block span-12">
+            <div class="section-header compact">
+              <div>
+                <h3>다음 실험 제안</h3>
+                <p>현재 결과를 기준으로 바꿔볼 만한 조건을 제안합니다.</p>
+              </div>
+            </div>
+            <div id="guidanceList" class="guidance-list guidance-grid"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="view-comparison" class="tab-view">
+        <div class="page-stack">
+          <section class="content-block capture-ready">
+            <div class="section-header">
+              <div>
+                <h3>결과 비교</h3>
+                <p>현재 설정을 기준으로 최근 대화만, 요약 전략, 추천 조합을 나란히 비교합니다.</p>
+              </div>
+            </div>
+            <div id="comparisonCards" class="comparison-grid"></div>
+          </section>
+
+          <section class="page-grid">
+            <div class="content-block span-6">
+              <div class="section-header compact">
+                <div>
+                  <h3>품질 점수</h3>
+                  <p>누락, 위험, 예산 초과 경고를 반영한 학습용 점수입니다.</p>
+                </div>
+              </div>
+              <div id="qualityChart" class="bar-chart"></div>
+            </div>
+            <div class="content-block span-6">
+              <div class="section-header compact">
+                <div>
+                  <h3>token과 캐시</h3>
+                  <p>입력 token, 캐시 재사용 후보, 예상 지연 시간을 함께 봅니다.</p>
+                </div>
+              </div>
+              <div id="costChart" class="bar-chart"></div>
+            </div>
+          </section>
+
+          <section class="content-block">
+            <div class="section-header compact">
+              <div>
+                <h3>상세 지표</h3>
+                <p>블로그 캡처에 넣기 좋은 요약 표입니다.</p>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>실험</th>
+                    <th>맥락 유지</th>
+                    <th>압축</th>
+                    <th>입력 token</th>
+                    <th>캐시 후보</th>
+                    <th>결과</th>
+                  </tr>
+                </thead>
+                <tbody id="metricsRows"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="view-calculator" class="tab-view">
+        <div class="page-grid calculator-grid">
+          <section class="content-block span-4">
+            <div class="section-header compact">
+              <div>
+                <h3>맥락 분석</h3>
+                <p>선택한 실험의 token 예산과 캐시 후보를 봅니다.</p>
+              </div>
+            </div>
+            <div class="token-meter">
+              <div id="tokenGauge" class="donut">
+                <span id="tokenGaugeText">0%</span>
+              </div>
+              <div>
+                <strong id="tokenDetails">-</strong>
+                <p id="tokenCaption">-</p>
+              </div>
+            </div>
+            <div id="sectionBreakdown" class="breakdown-list"></div>
+          </section>
+
+          <section class="content-block span-8">
+            <div class="section-header">
+              <div>
+                <h3>맥락 묶음</h3>
+                <p>실제로 프롬프트에 들어간 section이 무엇인지 확인합니다.</p>
+              </div>
+              <span id="bundleSummary" class="status-chip">-</span>
+            </div>
+            <div id="contextSections" class="context-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="view-learning" class="tab-view">
+        <div class="page-grid learning-grid">
+          <section class="content-block span-8 capture-ready">
+            <div class="learning-hero">
+              <p class="breadcrumb">캡처 노트</p>
+              <h3>블로그용 실험 요약</h3>
+              <p>실험 조건, 결과 차이, 학습 포인트를 한 화면에서 캡처할 수 있게 정리합니다.</p>
+            </div>
+            <div id="captureSummary" class="capture-summary"></div>
+            <div class="code-playground">
+              <div class="code-title">
+                <span>실험 의사코드</span>
+                <strong id="codeStrategyName">current</strong>
+              </div>
+              <pre id="pseudoCode"></pre>
+            </div>
+          </section>
+
+          <section class="side-stack span-4">
+            <article class="content-block tip-card">
+              <h3>정리 포인트</h3>
+              <div id="blogPoints" class="guidance-list"></div>
+            </article>
+            <article class="content-block">
+              <div class="section-header compact">
+                <div>
+                  <h3>맥락 위치 효과</h3>
+                  <p>긴 프롬프트에서는 앞과 끝의 정보가 더 안정적으로 보존되는 경향을 시각화합니다.</p>
+                </div>
+              </div>
+              <div class="degradation-chart" aria-label="context degradation chart">
+                <span style="height: 90%"></span>
+                <span style="height: 72%"></span>
+                <span class="weak" style="height: 42%"></span>
+                <span class="weak" style="height: 30%"></span>
+                <span style="height: 64%"></span>
+                <span style="height: 86%"></span>
+              </div>
+              <div class="chart-labels">
+                <span>시작</span>
+                <span>중간</span>
+                <span>끝</span>
+              </div>
+            </article>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
