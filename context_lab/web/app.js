@@ -10,12 +10,12 @@ const state = {
 const tabMeta = {
   simulator: {
     title: "실험하기",
-    subtitle: "프롬프트, 맥락 유지 개수, 압축 전략, KV 캐시 사용 방식을 바꿔 보며 결과를 비교합니다.",
+    subtitle: "프롬프트, 맥락 유지 개수, 압축 전략, RAG, KV 캐시를 바꿔 보며 결과를 비교합니다.",
     breadcrumb: "LLM Context Playground / 실험하기",
   },
   comparison: {
     title: "결과 비교",
-    subtitle: "같은 프롬프트를 여러 맥락 구성 방식으로 실행해 품질과 비용을 비교합니다.",
+    subtitle: "같은 프롬프트를 여러 맥락 구성 방식으로 실행하고 품질과 비용을 비교합니다.",
     breadcrumb: "LLM Context Playground / 결과 비교",
   },
   calculator: {
@@ -24,9 +24,9 @@ const tabMeta = {
     breadcrumb: "LLM Context Playground / 맥락 분석",
   },
   learning: {
-    title: "캡처 노트",
-    subtitle: "블로그에 정리하기 좋은 실험 요약과 학습 포인트를 정리합니다.",
-    breadcrumb: "LLM Context Playground / 캡처 노트",
+    title: "학습 가이드",
+    subtitle: "케이스별 추천 실험 순서, 관찰 포인트, 블로그 정리 포인트를 확인합니다.",
+    breadcrumb: "LLM Context Playground / 학습 가이드",
   },
 };
 
@@ -34,11 +34,11 @@ const compressionLabels = {
   none: "압축 없음",
   summary: "요약 압축",
   structured: "구조화 상태",
-  hybrid: "하이브리드",
+  hybrid: "Hybrid",
 };
 
 const retrievalLabels = {
-  off: "검색 끔",
+  off: "RAG 끔",
   on: "RAG 켬",
 };
 
@@ -57,6 +57,9 @@ const el = {
   caseSelect: document.querySelector("#caseSelect"),
   promptInput: document.querySelector("#promptInput"),
   restorePromptButton: document.querySelector("#restorePromptButton"),
+  modelMode: document.querySelector("#modelMode"),
+  liveScope: document.querySelector("#liveScope"),
+  modeNotice: document.querySelector("#modeNotice"),
   retentionTurns: document.querySelector("#retentionTurns"),
   compressionMode: document.querySelector("#compressionMode"),
   retrievalMode: document.querySelector("#retrievalMode"),
@@ -68,11 +71,14 @@ const el = {
   pageTitle: document.querySelector("#pageTitle"),
   pageSubtitle: document.querySelector("#pageSubtitle"),
   breadcrumb: document.querySelector("#breadcrumb"),
+  serverStatus: document.querySelector("#serverStatus"),
   caseStatus: document.querySelector("#caseStatus"),
   caseNotes: document.querySelector("#caseNotes"),
   experimentChecklist: document.querySelector("#experimentChecklist"),
+  caseGuide: document.querySelector("#caseGuide"),
   selectedScenarioChip: document.querySelector("#selectedScenarioChip"),
   currentResult: document.querySelector("#currentResult"),
+  finalConclusion: document.querySelector("#finalConclusion"),
   guidanceList: document.querySelector("#guidanceList"),
   apiPromptStats: document.querySelector("#apiPromptStats"),
   apiPromptPreview: document.querySelector("#apiPromptPreview"),
@@ -88,18 +94,55 @@ const el = {
   sectionBreakdown: document.querySelector("#sectionBreakdown"),
   bundleSummary: document.querySelector("#bundleSummary"),
   contextSections: document.querySelector("#contextSections"),
-  captureSummary: document.querySelector("#captureSummary"),
-  codeStrategyName: document.querySelector("#codeStrategyName"),
-  pseudoCode: document.querySelector("#pseudoCode"),
-  blogPoints: document.querySelector("#blogPoints"),
 };
 
 async function init() {
   state.options = await fetchJson("/api/options");
+  configureModeControls();
   renderTabs();
   renderCaseOptions();
   await loadCase();
+  updateModeNotice();
   await runExperiment();
+}
+
+function configureModeControls() {
+  const liveOption = el.modelMode.querySelector('option[value="openai"]');
+  if (!state.options.openai?.enabled) {
+    liveOption.disabled = true;
+    el.modelMode.value = "mock";
+  }
+  updateServerStatus();
+}
+
+function updateServerStatus() {
+  const mode = el.modelMode.value;
+  el.serverStatus.classList.toggle("live", mode === "openai");
+  el.serverStatus.classList.toggle("mock", mode === "mock");
+  el.serverStatus.textContent =
+    mode === "openai"
+      ? `Live API · ${state.options.openai?.model ?? "OpenAI"}`
+      : state.options.openai?.enabled
+        ? "Mock mode · Live 사용 가능"
+        : "Mock mode · API key 없음";
+}
+
+function updateModeNotice() {
+  const liveEnabled = Boolean(state.options.openai?.enabled);
+  if (el.modelMode.value === "mock") {
+    el.liveScope.disabled = true;
+    el.modeNotice.textContent =
+      liveEnabled
+        ? "Mock mode는 비용 없이 맥락 구성, 누락 여부, token 구조를 빠르게 학습합니다. 실제 모델 검증이 필요할 때 Live API로 전환하세요."
+        : "Mock mode로 실행 중입니다. Live API를 쓰려면 서버 환경변수 OPENAI_API_KEY를 설정하고 서버를 다시 시작해야 합니다.";
+  } else {
+    el.liveScope.disabled = false;
+    el.modeNotice.textContent =
+      el.liveScope.value === "all"
+        ? "Live API가 비교 후보 전체를 실제 호출합니다. 현재 화면 기준 4번의 OpenAI API 호출이 발생합니다."
+        : "Live API는 현재 설정만 실제 호출합니다. 비교 후보는 비용 절감을 위해 Mock mode로 계산합니다.";
+  }
+  updateServerStatus();
 }
 
 function renderTabs() {
@@ -145,6 +188,7 @@ async function loadCase() {
   el.caseNotes.textContent = data.notes;
   el.caseStatus.textContent = caseLabel(state.caseId);
   renderChecklist(data.expected, data.unsafe);
+  renderCaseGuide(data.guide);
 }
 
 function renderChecklist(expected, unsafe) {
@@ -164,14 +208,69 @@ function renderChecklist(expected, unsafe) {
   `;
 }
 
+function renderCaseGuide(guide) {
+  if (!guide) {
+    el.caseGuide.innerHTML = "";
+    return;
+  }
+  const recommended = (guide.recommended || []).map((item, index) => `
+    <article class="guide-step">
+      <div class="guide-step-number">${index + 1}</div>
+      <div>
+        <h5>${escapeHtml(item.title)}</h5>
+        <p>${escapeHtml(item.settings)}</p>
+        <span>${escapeHtml(item.observe)}</span>
+      </div>
+    </article>
+  `).join("");
+  const watch = (guide.watch || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  const blog = (guide.blog || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+
+  el.caseGuide.innerHTML = `
+    <div class="guide-overview">
+      <div>
+        <span class="guide-kicker">학습 목표</span>
+        <h4>${escapeHtml(guide.title)}</h4>
+        <p>${escapeHtml(guide.goal)}</p>
+      </div>
+    </div>
+    <div class="guide-layout">
+      <section>
+        <h4>추천 실험 순서</h4>
+        <div class="guide-steps">${recommended}</div>
+      </section>
+      <section>
+        <h4>관찰 포인트</h4>
+        <ul>${watch}</ul>
+      </section>
+      <section>
+        <h4>블로그 정리 포인트</h4>
+        <ul>${blog}</ul>
+      </section>
+    </div>
+  `;
+}
+
 async function runExperiment() {
   normalizeBudgetInputs();
+  updateModeNotice();
+  if (el.modelMode.value === "openai" && !state.options.openai?.enabled) {
+    renderError("OPENAI_API_KEY가 설정되어 있지 않아 Live API를 실행할 수 없습니다.");
+    return;
+  }
+
+  const originalRunText = el.runButton.innerHTML;
   el.runButton.disabled = true;
+  el.runButton.innerHTML =
+    el.modelMode.value === "openai"
+      ? `<span>Live API 호출 중</span><strong>응답 대기</strong>`
+      : `<span>Mock 실행 중</span><strong>결과 계산</strong>`;
   try {
     const query = new URLSearchParams({
       case: state.caseId,
       prompt: el.promptInput.value,
-      mode: "mock",
+      mode: el.modelMode.value,
+      liveVariants: el.liveScope.value,
       retentionTurns: el.retentionTurns.value,
       compression: el.compressionMode.value,
       retrieval: el.retrievalMode.value,
@@ -182,17 +281,30 @@ async function runExperiment() {
     state.experiment = await fetchJson(`/api/experiment?${query.toString()}`);
     state.selectedId = state.experiment.selectedId;
     renderAll();
+  } catch (error) {
+    renderError(error.message);
   } finally {
     el.runButton.disabled = false;
+    el.runButton.innerHTML = originalRunText;
   }
+}
+
+function renderError(message) {
+  el.currentResult.innerHTML = `
+    <div class="error-panel">
+      <strong>실험 실행 실패</strong>
+      <p>${escapeHtml(message)}</p>
+    </div>
+  `;
+  el.serverStatus.textContent = "실행 실패";
 }
 
 function renderAll() {
   renderCurrentResult();
   renderPromptInspection();
+  renderFinalConclusion();
   renderComparison();
   renderContextAnalysis();
-  renderCaptureNotes();
 }
 
 function selectedResult() {
@@ -202,10 +314,10 @@ function selectedResult() {
 function renderCurrentResult() {
   const result = selectedResult();
   el.selectedScenarioChip.textContent = result.name;
-  el.guidanceList.innerHTML = guidanceFor(result).map((item) => `<div>${escapeHtml(item)}</div>`).join("");
   el.currentResult.innerHTML = `
     <div class="answer-head">
       <div>
+        <span class="small-chip">${escapeHtml(modeLabel(result))}</span>
         <span class="small-chip">${escapeHtml(retentionLabel(result.settings.retentionTurns))}</span>
         <span class="small-chip">${escapeHtml(compressionLabels[result.settings.compression])}</span>
         <span class="small-chip">${escapeHtml(retrievalLabels[result.settings.retrieval])}</span>
@@ -216,18 +328,103 @@ function renderCurrentResult() {
     <div class="mini-metrics">
       ${metricBox("품질", `${result.qualityScore}`)}
       ${metricBox("입력 token", `${result.tokens}`)}
-      ${metricBox("캐시 후보", `${result.cachedTokens}`)}
-      ${metricBox("예상 지연", `${result.latencyMs} ms`)}
+      ${metricBox("실제 API token", actualTokenText(result))}
+      ${metricBox("지연 시간", `${result.latencyMs} ms`)}
     </div>
-    <pre>${escapeHtml(localizeAnswer(result.answer))}</pre>
+    <pre>${escapeHtml(localizeAnswer(result.answer, result.mode))}</pre>
     <p>${escapeHtml(result.lesson)}</p>
   `;
 }
 
+function renderFinalConclusion() {
+  const result = selectedResult();
+  const outcome = conclusionOutcome(result);
+  const evidenceStatus = result.missing.length ? "확인 필요" : "통과";
+  const safetyStatus = result.unsafe.length ? "위험 정보 노출" : "차단";
+  const insights = conclusionInsights(result);
+
+  el.finalConclusion.innerHTML = `
+    <div class="conclusion-status ${outcome.tone}">
+      <span>원했던 결과</span>
+      <strong>${escapeHtml(outcome.label)}</strong>
+      <p>${escapeHtml(outcome.description)}</p>
+    </div>
+    <div class="conclusion-grid">
+      ${conclusionMetric("근거 유지", evidenceStatus, result.missing.length ? result.missing.join(", ") : "필수 정보가 답변 경로에 유지됐습니다.", result.missing.length ? "bad" : "ok")}
+      ${conclusionMetric("위험 정보", safetyStatus, result.unsafe.length ? result.unsafe.join(", ") : "노출 금지 정보가 답변에 포함되지 않았습니다.", result.unsafe.length ? "bad" : "ok")}
+      ${conclusionMetric("Token / Cache", `${result.tokens}t · cache ${result.cachedTokens}t`, `입력 예산 ${result.availableTokens} token 중 ${result.tokenUtilization}%를 사용했습니다.`, "neutral")}
+      ${conclusionMetric("실행 방식", modeLabel(result), actualTokenText(result), result.mode === "openai" ? "ok" : "neutral")}
+    </div>
+    <section class="conclusion-notes">
+      <h4>특이점</h4>
+      <ul>${insights.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+    </section>
+  `;
+  el.guidanceList.innerHTML = guidanceFor(result).map((item) => `<div>${escapeHtml(item)}</div>`).join("");
+}
+
+function conclusionOutcome(result) {
+  if (result.unsafe.length) {
+    return {
+      tone: "bad",
+      label: "실패",
+      description: "응답에 노출되면 안 되는 정보가 포함됐습니다. privacy memory와 redaction 조건을 먼저 조정해야 합니다.",
+    };
+  }
+  if (result.missing.length) {
+    return {
+      tone: "warn",
+      label: "부분 충족",
+      description: "응답은 생성됐지만 유지해야 할 핵심 근거가 일부 빠졌습니다. 맥락 유지 개수, 압축, RAG 설정을 바꿔 비교하세요.",
+    };
+  }
+  return {
+    tone: "ok",
+    label: "충족",
+    description: "필수 근거를 유지했고 노출 금지 정보도 차단했습니다. 현재 설정은 이 케이스의 기준 실험으로 사용할 수 있습니다.",
+  };
+}
+
+function conclusionMetric(label, value, detail, tone) {
+  return `
+    <article class="conclusion-metric ${tone}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <p>${escapeHtml(detail)}</p>
+    </article>
+  `;
+}
+
+function conclusionInsights(result) {
+  const insights = [];
+  if (result.warnings.length) {
+    insights.push(`Context budget 경고: ${result.warnings.join(", ")}`);
+  }
+  if (result.settings.retrieval === "off") {
+    insights.push("RAG가 꺼져 있어 검색 근거 section이 최종 프롬프트에서 제외됩니다.");
+  } else {
+    insights.push("RAG가 켜져 있어 검색 근거가 최종 프롬프트에 포함됩니다.");
+  }
+  if (result.settings.compression === "none") {
+    insights.push("압축이 꺼져 있어 오래된 대화나 구조화 상태가 별도 section으로 보존되지 않습니다.");
+  } else {
+    insights.push(`${compressionLabels[result.settings.compression]} 설정으로 요약 또는 구조화 상태가 프롬프트에 반영됩니다.`);
+  }
+  if (result.cachedTokens) {
+    insights.push(`KV cache 후보 ${result.cachedTokens} token은 반복 prefix 비용을 줄이는 학습 포인트입니다.`);
+  } else {
+    insights.push("KV cache가 꺼져 있어 모든 context를 매 요청마다 다시 처리하는 기준선입니다.");
+  }
+  if (result.tokenUtilization >= 80) {
+    insights.push("입력 예산에 가까워졌으므로 응답 품질보다 trimming 위험을 먼저 확인해야 합니다.");
+  }
+  return insights;
+}
+
 function renderPromptInspection() {
   const result = selectedResult();
-  el.apiPromptStats.textContent = `${result.tokens} token · ${result.sections.length}개 section`;
-  el.apiPromptPreview.textContent = result.apiPrompt;
+  el.apiPromptStats.textContent = `${result.tokens} token · ${result.sections.length}개 section · ${modeLabel(result)}`;
+  el.apiPromptPreview.innerHTML = markedApiPromptHtml(result);
 
   const expected = state.experiment.expectedFacts.map((fact) => {
     const missed = result.missing.includes(fact);
@@ -262,6 +459,31 @@ function renderPromptInspection() {
   `;
 }
 
+function markedApiPromptHtml(result) {
+  return result.sections.map((section) => {
+    const isUserInput = section.label === "현재 사용자 질문";
+    const marker = isUserInput ? "*** 사용자 입력값 ***" : "*** 고정 컨텍스트 ***";
+    const typeLabel = isUserInput ? "입력 프롬프트" : fixedSectionType(section);
+    return `
+      <section class="prompt-section ${isUserInput ? "user-input" : "fixed-context"}">
+        <div class="prompt-marker">${marker}</div>
+        <div class="prompt-label">
+          <strong>[${escapeHtml(section.label)}]</strong>
+          <span>${escapeHtml(typeLabel)} · ${section.tokens} token · 출처=${escapeHtml(section.source)}</span>
+        </div>
+        <pre>${escapeHtml(section.content || "(비어 있음)")}</pre>
+      </section>
+    `;
+  }).join("");
+}
+
+function fixedSectionType(section) {
+  if (section.source === "retriever") return "검색/RAG 근거";
+  if (section.source === "tool") return "도구 결과 요약";
+  if (section.label === "최근 대화") return "이전 대화";
+  return "시스템/저장 상태";
+}
+
 function renderComparison() {
   el.comparisonCards.innerHTML = "";
   for (const result of state.experiment.results) {
@@ -278,6 +500,10 @@ function renderComparison() {
         ${passHtml(result)}
       </div>
       <p>${escapeHtml(result.description)}</p>
+      <div class="chip-row">
+        <span class="small-chip">${escapeHtml(modeLabel(result))}</span>
+        <span class="small-chip">${escapeHtml(actualTokenText(result))}</span>
+      </div>
       <div class="meter"><span style="width:${clamp(result.tokenUtilization)}%"></span></div>
       <div class="card-metrics"><span>${result.tokens} token</span><span>품질 ${result.qualityScore}</span></div>
     `;
@@ -301,10 +527,11 @@ function renderComparison() {
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${escapeHtml(result.name)}</td>
+      <td>${escapeHtml(modeLabel(result))}</td>
       <td>${escapeHtml(retentionLabel(result.settings.retentionTurns))}</td>
       <td>${escapeHtml(compressionLabels[result.settings.compression])}</td>
       <td>${result.tokens} (${result.tokenUtilization}%)</td>
-      <td>${result.cachedTokens} (${result.cacheReuseRatio}%)</td>
+      <td>${escapeHtml(actualTokenText(result))}</td>
       <td>${result.passed ? "통과" : `확인 필요: ${escapeHtml(issueSummary(result))}`}</td>
     `;
     el.metricsRows.append(row);
@@ -317,7 +544,7 @@ function renderContextAnalysis() {
   el.tokenGauge.style.background = `radial-gradient(circle at center, var(--surface) 0 58%, transparent 59%), conic-gradient(var(--primary) ${utilization * 3.6}deg, var(--surface-high) 0deg)`;
   el.tokenGaugeText.textContent = `${Math.round(utilization)}%`;
   el.tokenDetails.textContent = `${result.tokens} / ${result.availableTokens} 입력 token`;
-  el.tokenCaption.textContent = `캐시 후보 ${result.cachedTokens} token · 답변 예약 ${result.reservedOutputTokens} token 제외`;
+  el.tokenCaption.textContent = `KV cache 절감 ${result.cachedTokens} token · 응답 예약 ${result.reservedOutputTokens} token 제외`;
   el.bundleSummary.textContent = `${result.sections.length}개 section`;
 
   el.sectionBreakdown.innerHTML = "";
@@ -345,39 +572,18 @@ function renderContextAnalysis() {
   }
 }
 
-function renderCaptureNotes() {
-  const result = selectedResult();
-  const capture = state.experiment.capture;
-  el.captureSummary.innerHTML = `
-    <div class="capture-kicker">LLM Context Playground</div>
-    <h3>${escapeHtml(capture.headline)}</h3>
-    <div class="mini-metrics">
-      ${metricBox("선택 실험", capture.selected)}
-      ${metricBox("최고 품질", capture.bestQuality)}
-      ${metricBox("최소 token", capture.lowestTokens)}
-      ${metricBox("캐시 후보", capture.bestCache)}
-    </div>
-    <p>${escapeHtml(result.lesson)}</p>
-  `;
-  el.blogPoints.innerHTML = [
-    `프롬프트: ${state.experiment.prompt}`,
-    `설정: ${retentionLabel(result.settings.retentionTurns)} · ${compressionLabels[result.settings.compression]} · ${retrievalLabels[result.settings.retrieval]} · ${kvLabels[result.settings.kvCache]}`,
-    `결과: 품질 ${result.qualityScore}, 입력 ${result.tokens} token, 캐시 후보 ${result.cachedTokens} token`,
-    result.lesson,
-  ].map((item) => `<div>${escapeHtml(item)}</div>`).join("");
-  el.codeStrategyName.textContent = result.id;
-  el.pseudoCode.textContent = pseudoCode(result);
-}
-
 function guidanceFor(result) {
   const guidance = [
     `현재 선택한 '${result.name}'은 ${retentionLabel(result.settings.retentionTurns)}를 직접 포함합니다.`,
+    result.mode === "openai"
+      ? `이 답변은 ${result.model} Live API에서 받은 실제 응답입니다. Mock 점수는 보조 평가로만 해석하세요.`
+      : "이 답변은 mock provider가 만든 모의 응답입니다. 실제 모델 품질 검증은 Live API로 확인하세요.",
     result.lesson,
   ];
   if (result.cachedTokens) {
-    guidance.push(`KV 캐시 후보는 약 ${result.cachedTokens} token입니다. 반복되는 정책, 요약, 프로필을 prefix로 둘 때 효과가 큽니다.`);
+    guidance.push(`KV cache 절감 추정치는 ${result.cachedTokens} token입니다. 반복되는 정책, 요약, 프로필을 prefix로 둘수록 효과가 커집니다.`);
   } else {
-    guidance.push("KV 캐시를 끄면 같은 정책과 요약도 매 요청마다 다시 계산한다고 보면 됩니다.");
+    guidance.push("KV cache를 끄면 같은 정책과 요약도 매 요청마다 다시 계산된다고 보면 됩니다.");
   }
   if (result.missing.length) {
     guidance.push(`누락된 근거: ${result.missing.join(", ")}. 유지 개수를 늘리거나 RAG를 켜서 다시 비교하세요.`);
@@ -404,6 +610,17 @@ function passHtml(result) {
   return `<span class="pass-pill ${result.passed ? "ok" : "bad"}">${result.passed ? "통과" : "확인 필요"}</span>`;
 }
 
+function modeLabel(result) {
+  return result.mode === "openai" ? `Live API · ${result.model}` : "Mock mode";
+}
+
+function actualTokenText(result) {
+  if (result.actualTotalTokens) {
+    return `${result.actualTotalTokens} total`;
+  }
+  return result.mode === "openai" ? "usage 대기" : "mock";
+}
+
 function issueSummary(result) {
   const parts = [];
   if (result.missing.length) parts.push(`누락: ${result.missing.join(", ")}`);
@@ -412,7 +629,8 @@ function issueSummary(result) {
   return parts.length ? parts.join(" · ") : "필수 맥락 보존";
 }
 
-function localizeAnswer(answer) {
+function localizeAnswer(answer, mode) {
+  if (mode === "openai") return String(answer);
   return String(answer).replace(/^Mock 답변:/, "모의 답변:");
 }
 
@@ -435,28 +653,15 @@ function caseLabel(id) {
   return labels[id] ?? id;
 }
 
-function pseudoCode(result) {
-  return `사용자_질문 = 입력한_프롬프트
-맥락 = [
-  정책,
-  ${result.settings.compression === "none" ? "# 압축 section 없음" : `${compressionLabels[result.settings.compression]} section`},
-  ${result.settings.retrieval === "on" ? "검색_근거," : "# 검색 근거 비활성화"}
-  최근_대화(${result.settings.retentionTurns}),
-  현재_사용자_질문,
-]
-
-if KV_캐시 == "${kvLabels[result.settings.kvCache]}":
-  반복_prefix_캐시(정책, 요약, 프로필, 검색_근거)
-
-답변 = 모델.generate(맥락)
-측정(token=${result.tokens}, cache=${result.cachedTokens}, quality=${result.qualityScore})`;
-}
-
 function normalizeBudgetInputs() {
   const maxValue = Math.max(120, Number(el.maxTokens.value) || 900);
   const reservedValue = Math.max(20, Number(el.reservedTokens.value) || 200);
   el.maxTokens.value = String(maxValue);
   el.reservedTokens.value = String(reservedValue >= maxValue ? Math.max(20, maxValue - 20) : reservedValue);
+}
+
+function shouldAutoRun() {
+  return el.modelMode.value === "mock";
 }
 
 function clamp(value) {
@@ -473,10 +678,17 @@ function escapeHtml(value) {
 
 async function fetchJson(url) {
   const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(await response.text());
+  if (response.ok) {
+    return response.json();
   }
-  return response.json();
+  let message = await response.text();
+  try {
+    const parsed = JSON.parse(message);
+    message = parsed.error || message;
+  } catch {
+    // Keep raw response text.
+  }
+  throw new Error(message);
 }
 
 el.caseSelect.addEventListener("change", async () => {
@@ -485,8 +697,13 @@ el.caseSelect.addEventListener("change", async () => {
 });
 el.restorePromptButton.addEventListener("click", () => {
   el.promptInput.value = state.defaultPrompt;
-  runExperiment();
+  if (shouldAutoRun()) runExperiment();
 });
+el.modelMode.addEventListener("change", () => {
+  updateModeNotice();
+  if (shouldAutoRun()) runExperiment();
+});
+el.liveScope.addEventListener("change", updateModeNotice);
 el.runButton.addEventListener("click", runExperiment);
 el.resetBudgetButton.addEventListener("click", () => {
   el.retentionTurns.value = "4";
@@ -495,10 +712,13 @@ el.resetBudgetButton.addEventListener("click", () => {
   el.kvCacheMode.value = "static";
   el.maxTokens.value = "900";
   el.reservedTokens.value = "200";
-  runExperiment();
+  if (shouldAutoRun()) runExperiment();
 });
 for (const input of [el.retentionTurns, el.compressionMode, el.retrievalMode, el.kvCacheMode, el.maxTokens, el.reservedTokens]) {
-  input.addEventListener("change", runExperiment);
+  input.addEventListener("change", () => {
+    if (shouldAutoRun()) runExperiment();
+    else updateModeNotice();
+  });
 }
 
 init().catch((error) => {
