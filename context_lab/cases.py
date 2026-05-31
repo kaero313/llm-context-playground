@@ -24,6 +24,15 @@ def load_case(case_id: str) -> tuple[SessionStore, str]:
     return deepcopy(session), user_turn
 
 
+def case_guide(case_id: str) -> dict[str, object]:
+    try:
+        guide = _CASE_GUIDES[case_id]
+    except KeyError as exc:
+        known = ", ".join(available_cases())
+        raise ValueError(f"Unknown case '{case_id}'. Available: {known}") from exc
+    return deepcopy(guide)
+
+
 def _support_refund() -> tuple[SessionStore, str]:
     transcript = [
         Message("user", "3월 2일에 Pro 플랜을 구매했고 답변은 한국어로 받고 싶어요."),
@@ -300,4 +309,241 @@ _CASES = {
     "privacy_memory": _privacy_memory,
     "long_running_session": _long_running_session,
     "openai_state": _openai_state,
+}
+
+_CASE_GUIDES = {
+    "support_refund": {
+        "title": "환불 문의: 오래된 구매 정보와 최신 요청을 함께 유지하기",
+        "goal": (
+            "최근 대화에는 환불 요청만 남아 있고, 구매일과 invoice id는 더 이전 대화와 도구 결과에 있습니다. "
+            "이 케이스는 sliding window만 쓰면 중요한 근거가 빠지고, summary/RAG/tool summary를 섞으면 답변 품질이 회복되는 과정을 학습하기 좋습니다."
+        ),
+        "recommended": [
+            {
+                "title": "최근 대화만 유지",
+                "settings": "최근 2개 메시지 · 압축 없음 · RAG 끔 · KV 캐시 없음",
+                "observe": "invoice INV-4431, 구매일, 30일 환불 조건이 빠지는지 확인합니다.",
+            },
+            {
+                "title": "요약만 추가",
+                "settings": "최근 2~4개 메시지 · 요약 압축 · RAG 끔",
+                "observe": "요약이 구매일과 Enterprise 전환 사유를 충분히 보존하는지 봅니다.",
+            },
+            {
+                "title": "RAG와 도구 요약 추가",
+                "settings": "Hybrid · RAG 켬 · 정적 prefix 캐시",
+                "observe": "정책 문서와 invoice lookup 결과가 최종 프롬프트에 들어가며 답변 누락이 줄어드는지 확인합니다.",
+            },
+            {
+                "title": "Live API 검증",
+                "settings": "Live API · 현재 설정만 호출",
+                "observe": "실제 모델이 한국어, invoice, 30일 조건, Enterprise 중복 구매 사유를 모두 언급하는지 확인합니다.",
+            },
+        ],
+        "watch": [
+            "최종 API 입력 프롬프트에서 invoice id와 환불 정책이 어느 section에 들어갔는지 확인하세요.",
+            "최근 대화 유지 개수를 줄였을 때 어떤 section이 budget trimming으로 빠지는지 비교하세요.",
+            "Mock 통과와 실제 모델 답변 품질은 다를 수 있으므로 결론 전 Live API로 한 번 검증하세요.",
+        ],
+        "blog": [
+            "최근 대화만으로는 사용자가 기대하는 답변 근거가 사라질 수 있다.",
+            "업무형 챗봇에서는 요약보다도 정책 문서/RAG와 tool summary가 결정적 근거가 되는 경우가 많다.",
+            "KV cache는 정책, 요약, 프로필처럼 반복되는 prefix를 줄이는 비용 최적화 관점에서 설명하기 좋다.",
+        ],
+    },
+    "internal_policy": {
+        "title": "내부 정책 충돌: 오래된 기억보다 최신 정책 우선하기",
+        "goal": (
+            "이전 대화에는 낡은 정책성 답변이 있고, 검색 문서에는 최신 2026 정책이 있습니다. "
+            "모델이 오래된 assistant 답변을 그대로 따르지 않고 최신 정책 문서와 현재 질문을 우선하는지 확인하는 케이스입니다."
+        ),
+        "recommended": [
+            {
+                "title": "대화 전체 유지",
+                "settings": "전체 대화 · 압축 없음 · RAG 끔",
+                "observe": "오래된 assistant 발화가 답변에 영향을 주어 잘못된 결론을 만들 가능성을 봅니다.",
+            },
+            {
+                "title": "최신 정책 검색",
+                "settings": "최근 4개 메시지 · RAG 켬 · 정적 prefix 캐시",
+                "observe": "500 USD, 관리자 승인, 모니터 250 USD 조건이 검색 근거로 들어오는지 확인합니다.",
+            },
+            {
+                "title": "구조화 상태 비교",
+                "settings": "구조화 상태 또는 Hybrid",
+                "observe": "사용자 역할과 팀 위치 같은 상태가 답변 배경으로 유지되는지 확인합니다.",
+            },
+            {
+                "title": "Live API 검증",
+                "settings": "Live API · 현재 설정만 호출",
+                "observe": "실제 모델이 '최신 정책 기준'이라는 우선순위를 명시하는지 확인합니다.",
+            },
+        ],
+        "watch": [
+            "최신 정책과 과거 답변이 충돌할 때 policy section의 우선순위가 충분한지 보세요.",
+            "RAG를 끄면 최신 정책 숫자와 승인 조건이 빠지는지 비교하세요.",
+            "정답 여부보다 '근거의 출처를 어디로 잡는지'를 중심으로 분석하세요.",
+        ],
+        "blog": [
+            "대화 기록은 항상 정답이 아니라 오래된 상태일 수 있다.",
+            "업무 정책형 질문은 최신 문서/RAG를 높은 우선순위로 주입해야 한다.",
+            "충돌하는 context가 있을 때 시스템 정책에 우선순위 규칙을 명시해야 한다.",
+        ],
+    },
+    "tool_result_compaction": {
+        "title": "도구 결과 압축: raw output을 그대로 넣지 않기",
+        "goal": (
+            "audit tool은 많은 row와 raw IP를 반환하지만, 답변에는 incident 요약과 판단만 필요합니다. "
+            "이 케이스는 tool result를 그대로 넣는 방식과 요약해서 넣는 방식의 token, privacy, 답변 품질 차이를 학습합니다."
+        ),
+        "recommended": [
+            {
+                "title": "raw 결과 포함 상상하기",
+                "settings": "압축 없음 · 큰 token 예산",
+                "observe": "raw row가 길어질수록 핵심 요약보다 불필요한 IP 목록이 context를 차지한다는 점을 확인합니다.",
+            },
+            {
+                "title": "tool summary 유지",
+                "settings": "Hybrid 또는 tool compaction · RAG 켬",
+                "observe": "11건 실패, W-17, 상위 대응 필요 여부만 남고 raw IP는 빠지는지 봅니다.",
+            },
+            {
+                "title": "예산 제한",
+                "settings": "최대 입력 token을 낮춤",
+                "observe": "긴 tool output이 budget trimming을 유발할 때 어떤 근거가 먼저 빠지는지 확인합니다.",
+            },
+            {
+                "title": "Live API 검증",
+                "settings": "Live API · 현재 설정만 호출",
+                "observe": "실제 모델이 raw IP를 노출하지 않고 incident update 형태로 정리하는지 확인합니다.",
+            },
+        ],
+        "watch": [
+            "답변에 raw IP prefix가 포함되면 실패로 봅니다.",
+            "citation이나 tool summary가 있으면 raw row 전체를 넣지 않아도 근거성이 유지되는지 봅니다.",
+            "token 절감과 정보 손실 사이의 균형을 관찰하세요.",
+        ],
+        "blog": [
+            "도구 결과는 원문 전체보다 '근거 가능한 요약 + citation' 형태가 안전하다.",
+            "긴 tool output은 context window를 빠르게 잠식하므로 compaction 대상 1순위다.",
+            "보안/감사 응답에서는 필요한 사건 정보와 민감한 원자료를 분리해야 한다.",
+        ],
+    },
+    "privacy_memory": {
+        "title": "개인정보 memory: 기억할 것과 버릴 것 분리하기",
+        "goal": (
+            "사용자 선호도는 장기 memory로 저장해도 되지만 이메일과 전화번호는 저장하거나 재노출하면 안 됩니다. "
+            "이 케이스는 redaction, safe memory, unsafe memory 차이를 학습하기 위한 privacy 중심 실험입니다."
+        ),
+        "recommended": [
+            {
+                "title": "최근 대화 직접 유지",
+                "settings": "최근 4~8개 메시지 · 압축 없음",
+                "observe": "전화번호와 이메일이 최종 프롬프트에 그대로 남을 위험을 확인합니다.",
+            },
+            {
+                "title": "안전 memory만 유지",
+                "settings": "구조화 상태 · 안전 memory",
+                "observe": "한국어/간결한 답변 선호는 남고 연락처는 빠지는지 확인합니다.",
+            },
+            {
+                "title": "redaction 확인",
+                "settings": "privacy 전략 또는 개인정보가 포함된 prompt 입력",
+                "observe": "[REDACTED_PHONE]처럼 마스킹된 값만 답변 경로에 남는지 확인합니다.",
+            },
+            {
+                "title": "Live API 검증",
+                "settings": "Live API · 현재 설정만 호출",
+                "observe": "실제 모델이 전화번호를 반복하지 않고 저장하면 안 되는 정보라고 설명하는지 봅니다.",
+            },
+        ],
+        "watch": [
+            "최종 API 입력 프롬프트 자체에 민감 정보가 남아 있으면 응답 이전 단계에서 이미 위험합니다.",
+            "장기 memory에는 선호도와 개인정보가 섞이지 않도록 section을 분리해야 합니다.",
+            "Mock 평가만 보지 말고 API 입력 프롬프트를 먼저 확인하세요.",
+        ],
+        "blog": [
+            "memory는 많이 저장할수록 좋은 기능이 아니라, 안전하게 저장할 수 있는 것만 남기는 기능이다.",
+            "privacy 실험은 답변뿐 아니라 최종 프롬프트 입력 단계부터 점검해야 한다.",
+            "사용자 선호도와 연락처 정보는 보존 정책이 완전히 다르다.",
+        ],
+    },
+    "long_running_session": {
+        "title": "긴 세션: 중요한 결정이 오래된 대화에 있을 때",
+        "goal": (
+            "긴 대화 끝에 중요한 결정이 등장하고, 이후 많은 턴이 쌓이는 상황입니다. "
+            "전체 대화, sliding window, summary, memory를 비교하며 오래된 핵심 결정을 어떻게 보존할지 학습합니다."
+        ),
+        "recommended": [
+            {
+                "title": "최근 대화만 유지",
+                "settings": "최근 2~4개 메시지 · 압축 없음",
+                "observe": "APAC first와 rollback owner 같은 핵심 결정이 빠지는지 확인합니다.",
+            },
+            {
+                "title": "전체 대화 유지",
+                "settings": "전체 대화 · 큰 token 예산",
+                "observe": "정보는 유지되지만 token 사용량이 급증하는 기준선을 확인합니다.",
+            },
+            {
+                "title": "요약 + RAG",
+                "settings": "요약 압축 또는 Hybrid · RAG 켬",
+                "observe": "긴 세션의 결론이 summary/memory에 남아 token을 줄이면서 답변 품질을 유지하는지 봅니다.",
+            },
+            {
+                "title": "예산 압박 실험",
+                "settings": "최대 입력 token을 120~300으로 낮춤",
+                "observe": "budget trimming이 발생할 때 어떤 section이 탈락하는지 확인합니다.",
+            },
+        ],
+        "watch": [
+            "전체 대화를 넣는 것이 항상 최선은 아닙니다. 비용과 latency를 함께 보세요.",
+            "중요 결정은 단순 최근성보다 summary/memory에 승격되어야 합니다.",
+            "맥락 위치 효과 때문에 긴 프롬프트 중간 정보가 약해질 수 있습니다.",
+        ],
+        "blog": [
+            "긴 세션에서는 sliding window만으로는 오래된 핵심 결정을 잃을 수 있다.",
+            "summary는 오래된 정보를 줄이는 기능이 아니라 중요한 결정을 승격하는 기능으로 설계해야 한다.",
+            "context budget 실험은 품질뿐 아니라 token, latency, cache를 함께 봐야 한다.",
+        ],
+    },
+    "openai_state": {
+        "title": "OpenAI 상태 관리: manual state와 stored conversation 비교하기",
+        "goal": (
+            "매 요청에 context를 직접 넣는 방식과 provider 쪽 conversation state를 활용하는 방식을 개념적으로 비교합니다. "
+            "context window, compaction, truncation, stored conversation의 차이를 정리하는 이론형 케이스입니다."
+        ),
+        "recommended": [
+            {
+                "title": "manual state 관찰",
+                "settings": "Mock mode · 최종 API 입력 프롬프트 확인",
+                "observe": "client가 어떤 section을 직접 구성해 보내는지 확인합니다.",
+            },
+            {
+                "title": "compaction 비교",
+                "settings": "요약 압축 또는 Hybrid",
+                "observe": "긴 기록을 직접 보내지 않고 요약으로 의미를 유지하는 방식을 확인합니다.",
+            },
+            {
+                "title": "context window 압박",
+                "settings": "최대 입력 token 낮춤",
+                "observe": "window 한계를 넘기기 전에 어떤 정보가 잘리는지 확인합니다.",
+            },
+            {
+                "title": "Live API 설명 검증",
+                "settings": "Live API · 현재 설정만 호출",
+                "observe": "실제 모델이 manual state, stored conversation, compaction을 명확히 구분해 설명하는지 확인합니다.",
+            },
+        ],
+        "watch": [
+            "이 케이스는 특정 업무 정답보다 개념 구분이 핵심입니다.",
+            "stored conversation은 payload를 줄일 수 있지만, 어떤 상태가 provider에 남는지 추적해야 합니다.",
+            "manual state는 투명하지만 매 요청 token 비용이 커질 수 있습니다.",
+        ],
+        "blog": [
+            "LLM 앱의 state 관리는 '무엇을 모델에 보낼 것인가'와 '무엇을 provider에 맡길 것인가'의 선택이다.",
+            "context window, compaction, truncation은 서로 다른 문제를 푸는 전략이다.",
+            "학습용 실험에서는 최종 API 입력을 눈으로 확인하는 과정이 가장 중요하다.",
+        ],
+    },
 }
