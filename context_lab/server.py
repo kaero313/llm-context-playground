@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from context_lab.cases import available_cases, load_case
+from context_lab.cases import available_cases, case_guide, load_case
 from context_lab.evaluation import compare_strategies, evaluate_case
 from context_lab.models import Budget, ContextBundle, ContextSection
 from context_lab.providers import LLMProvider
@@ -111,11 +112,23 @@ def options_payload() -> dict[str, Any]:
     cases = []
     for case_id in available_cases():
         session, user_turn = load_case(case_id)
-        cases.append({"id": case_id, "notes": session.notes, "userTurn": user_turn})
+        guide = case_guide(case_id)
+        cases.append(
+            {
+                "id": case_id,
+                "notes": session.notes,
+                "userTurn": user_turn,
+                "guideTitle": guide["title"],
+            }
+        )
     return {
         "cases": cases,
         "strategies": available_strategies(),
         "defaultStrategies": DEFAULT_STRATEGIES,
+        "openai": {
+            "enabled": bool(os.getenv("OPENAI_API_KEY")),
+            "model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+        },
     }
 
 
@@ -150,6 +163,7 @@ def case_payload(case_id: str) -> dict[str, Any]:
         ],
         "expected": list(session.expected_answer_contains),
         "unsafe": list(session.unsafe_answer_contains),
+        "guide": case_guide(case_id),
     }
 
 
@@ -181,6 +195,8 @@ def experiment_payload(params: dict[str, list[str]]) -> dict[str, Any]:
     session, default_prompt = load_case(case_id)
     prompt = _one(params, "prompt", default_prompt).strip() or default_prompt
     budget = _budget(params)
+    mode = _choice(params, "mode", "mock", {"mock", "openai"})
+    live_variants = _choice(params, "liveVariants", "current", {"current", "all"})
     base_config = {
         "retentionTurns": _int(params, "retentionTurns", 4),
         "compression": _choice(params, "compression", "hybrid", {"none", "summary", "structured", "hybrid"}),
@@ -229,7 +245,7 @@ def experiment_payload(params: dict[str, list[str]]) -> dict[str, Any]:
             name=name,
             description=description,
             config=config,
-            mode=_one(params, "mode", "mock"),
+            mode=_variant_mode(mode, live_variants, variant_id),
         )
         for variant_id, name, description, config in variants
     ]
@@ -241,6 +257,8 @@ def experiment_payload(params: dict[str, list[str]]) -> dict[str, Any]:
         "defaultPrompt": default_prompt,
         "settings": {
             **base_config,
+            "mode": mode,
+            "liveVariants": live_variants,
             "maxInputTokens": budget.max_input_tokens,
             "reservedOutputTokens": budget.reserved_output_tokens,
             "availableTokens": budget.available_input_tokens,
@@ -252,6 +270,14 @@ def experiment_payload(params: dict[str, list[str]]) -> dict[str, Any]:
         "guidance": experiment_guidance(selected, session),
         "capture": capture_summary(selected, results),
     }
+
+
+def _variant_mode(mode: str, live_variants: str, variant_id: str) -> str:
+    if mode == "mock":
+        return "mock"
+    if live_variants == "all" or variant_id == "current":
+        return "openai"
+    return "mock"
 
 
 def experiment_result_payload(
@@ -266,7 +292,11 @@ def experiment_result_payload(
     mode: str,
 ) -> dict[str, Any]:
     context = build_experiment_context(session, prompt, budget, config, variant_id)
-    generation = LLMProvider().generate(context, mode=mode)
+    generation = LLMProvider().generate(
+        context,
+        mode=mode,
+        max_output_tokens=budget.reserved_output_tokens,
+    )
     combined = context.render() + "\n" + generation.text
     missing = [
         expected
@@ -282,6 +312,7 @@ def experiment_result_payload(
     reusable_ratio = round((cached_tokens / max(1, context.estimated_tokens)) * 100, 1)
     billable_tokens = max(0, context.estimated_tokens - round(cached_tokens * 0.5))
     estimated_latency = estimated_latency_ms(context, config, cached_tokens)
+    latency_ms = generation.latency_ms if generation.latency_ms is not None else estimated_latency
     utilization = (
         round((context.estimated_tokens / budget.available_input_tokens) * 100, 1)
         if budget.available_input_tokens
@@ -293,8 +324,13 @@ def experiment_result_payload(
         "name": name,
         "description": description,
         "mode": mode,
+        "provider": generation.provider,
+        "model": generation.model,
         "settings": dict(config),
         "tokens": context.estimated_tokens,
+        "actualInputTokens": generation.input_tokens,
+        "actualOutputTokens": generation.output_tokens,
+        "actualTotalTokens": generation.total_tokens,
         "billableTokens": billable_tokens,
         "cachedTokens": cached_tokens,
         "cacheReuseRatio": reusable_ratio,
@@ -302,7 +338,8 @@ def experiment_result_payload(
         "reservedOutputTokens": budget.reserved_output_tokens,
         "availableTokens": budget.available_input_tokens,
         "tokenUtilization": utilization,
-        "latencyMs": estimated_latency,
+        "latencyMs": latency_ms,
+        "estimatedLatencyMs": estimated_latency,
         "qualityScore": quality,
         "passed": not missing and not unsafe,
         "missing": missing,
@@ -312,7 +349,7 @@ def experiment_result_payload(
         "apiPrompt": context.render(),
         "apiMessages": context.as_prompt_messages(),
         "answer": generation.text,
-        "lesson": lesson_for_result(config, missing, unsafe, utilization, cached_tokens),
+        "lesson": lesson_for_result(config, missing, unsafe, utilization, cached_tokens, mode),
     }
 
 
@@ -334,7 +371,7 @@ def build_experiment_context(
         sections.append(ContextSection("사용자 프로필", "\n".join(session.profile_lines()), priority=95))
         memory = "\n".join(f"- {item.text}" for item in session.safe_memory_items())
         sections.append(ContextSection("안전 memory", memory, priority=85))
-    if retrieval or compression == "hybrid":
+    if retrieval:
         retriever = Retriever(session.documents, session.safe_memory_items())
         hits = retriever.search(prompt + " " + session.summary, limit=4)
         retrieved = "\n\n".join(
@@ -404,18 +441,20 @@ def lesson_for_result(
     unsafe: list[str],
     utilization: float,
     cached_tokens: int,
+    mode: str,
 ) -> str:
+    mode_note = "실제 모델 응답을 기준으로 확인했습니다." if mode == "openai" else "Mock 응답 기준의 학습용 판단입니다."
     if unsafe:
-        return "민감 정보가 답변 경로에 포함되었습니다. privacy 필터와 안전한 memory 분리가 필요합니다."
+        return f"{mode_note} 민감 정보가 응답 경로에 포함되었습니다. privacy filter와 안전 memory 분리가 필요합니다."
     if missing and config["compression"] == "none":
-        return "최근 대화만으로는 오래된 결정이나 문서 근거가 빠질 수 있습니다. 요약 또는 RAG를 추가해 보세요."
+        return f"{mode_note} 최근 대화만으로는 오래된 결정이나 문서 근거가 빠질 수 있습니다. 요약 또는 RAG를 추가해 보세요."
     if missing:
-        return "필수 근거가 아직 부족합니다. 유지 턴 수를 늘리거나 검색 근거를 켜서 비교해 보세요."
+        return f"{mode_note} 필수 근거가 아직 부족합니다. 유지 대화 수를 늘리거나 검색 근거를 켜서 비교해 보세요."
     if utilization > 80:
-        return "답변은 가능하지만 token 예산에 가깝습니다. 요약 전략과 KV 캐시 재사용을 실험할 구간입니다."
+        return f"{mode_note} 응답은 가능하지만 token 예산에 가깝습니다. 요약 전략과 KV cache 재사용을 실험할 구간입니다."
     if cached_tokens:
-        return "반복되는 정책, 요약, 프로필을 cache prefix로 두면 다음 턴의 계산 부담을 줄일 수 있습니다."
-    return "현재 설정은 기준선으로 좋습니다. 유지 턴 수를 줄이거나 압축을 켜서 비용 변화를 비교해 보세요."
+        return f"{mode_note} 반복되는 정책, 요약, 프로필을 cache prefix로 두면 다음 턴의 계산 부담을 줄일 수 있습니다."
+    return f"{mode_note} 현재 설정은 기준선으로 좋습니다. 유지 대화 수를 줄이거나 압축을 켜서 비용 변화를 비교해 보세요."
 
 
 def experiment_guidance(result: dict[str, Any], session) -> list[str]:
@@ -426,10 +465,10 @@ def experiment_guidance(result: dict[str, Any], session) -> list[str]:
     ]
     if result["cachedTokens"]:
         guidance.append(
-            f"KV 캐시 후보는 약 {result['cachedTokens']} token입니다. 정책과 요약처럼 반복되는 prefix에 적합합니다."
+            f"KV cache 절감 추정치는 {result['cachedTokens']} token입니다. 정책과 요약처럼 반복되는 prefix에 적합합니다."
         )
     else:
-        guidance.append("KV 캐시를 끄면 매 턴 같은 정책과 요약을 다시 처리한다고 가정합니다.")
+        guidance.append("KV cache를 끄면 매 턴 같은 정책과 요약도 다시 처리된다고 가정합니다.")
     if _message_count(session) > retention:
         guidance.append("오래된 대화에 중요한 결정이 있으면 최근 대화만 유지하는 방식은 실패할 수 있습니다.")
     return guidance
@@ -464,12 +503,17 @@ def result_payload(result, budget: Budget) -> dict[str, Any]:
         "case": result.case_id,
         "strategy": result.strategy,
         "mode": result.mode,
+        "provider": result.generation.provider,
+        "model": result.generation.model,
         "tokens": result.context.estimated_tokens,
+        "actualInputTokens": result.generation.input_tokens,
+        "actualOutputTokens": result.generation.output_tokens,
+        "actualTotalTokens": result.generation.total_tokens,
         "maxInputTokens": budget.max_input_tokens,
         "reservedOutputTokens": budget.reserved_output_tokens,
         "availableTokens": available_tokens,
         "tokenUtilization": token_utilization,
-        "latencyMs": round(result.context.latency_ms, 2),
+        "latencyMs": result.generation.latency_ms or round(result.context.latency_ms, 2),
         "passed": result.passed,
         "missing": list(result.missing_expected),
         "unsafe": list(result.unsafe_found),

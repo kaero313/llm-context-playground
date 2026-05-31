@@ -45,7 +45,11 @@ def evaluate_case(
     if strategy_name == "privacy":
         user_turn, _ = redact_pii(user_turn)
     context = get_strategy(strategy_name).build(session, user_turn, budget)
-    generation = LLMProvider().generate(context, mode=mode)
+    generation = LLMProvider().generate(
+        context,
+        mode=mode,
+        max_output_tokens=budget.reserved_output_tokens,
+    )
     combined = context.render() + "\n" + generation.text
     missing = tuple(
         expected
@@ -79,4 +83,3 @@ def compare_strategies(
         evaluate_case(case_id, strategy_name, mode=mode, budget=budget)
         for strategy_name in strategies
     ]
-
