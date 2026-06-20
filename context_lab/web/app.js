@@ -5,6 +5,8 @@ const state = {
   defaultPrompt: "",
   activeTab: "simulator",
   selectedId: "current",
+  lastRunSnapshot: null,
+  strategyDiff: null,
 };
 
 const tabMeta = {
@@ -82,6 +84,7 @@ const el = {
   guidanceList: document.querySelector("#guidanceList"),
   apiPromptStats: document.querySelector("#apiPromptStats"),
   apiPromptPreview: document.querySelector("#apiPromptPreview"),
+  strategyDiffPanel: document.querySelector("#strategyDiffPanel"),
   answerRequirementStatus: document.querySelector("#answerRequirementStatus"),
   comparisonCards: document.querySelector("#comparisonCards"),
   qualityChart: document.querySelector("#qualityChart"),
@@ -260,6 +263,8 @@ async function runExperiment() {
   }
 
   const originalRunText = el.runButton.innerHTML;
+  const nextFingerprint = experimentFingerprint();
+  const previousSnapshot = state.lastRunSnapshot;
   el.runButton.disabled = true;
   el.runButton.innerHTML =
     el.modelMode.value === "openai"
@@ -278,8 +283,18 @@ async function runExperiment() {
       maxInputTokens: el.maxTokens.value,
       reservedOutputTokens: el.reservedTokens.value,
     });
-    state.experiment = await fetchJson(`/api/experiment?${query.toString()}`);
+    const experiment = await fetchJson(`/api/experiment?${query.toString()}`);
+    const current = currentResultFrom(experiment);
+    state.strategyDiff =
+      previousSnapshot && previousSnapshot.fingerprint === nextFingerprint
+        ? buildStrategyDiff(previousSnapshot.result, current)
+        : null;
+    state.experiment = experiment;
     state.selectedId = state.experiment.selectedId;
+    state.lastRunSnapshot = {
+      fingerprint: nextFingerprint,
+      result: cloneForDiff(current),
+    };
     renderAll();
   } catch (error) {
     renderError(error.message);
@@ -302,6 +317,7 @@ function renderError(message) {
 function renderAll() {
   renderCurrentResult();
   renderPromptInspection();
+  renderStrategyDiff();
   renderFinalConclusion();
   renderComparison();
   renderContextAnalysis();
@@ -309,6 +325,10 @@ function renderAll() {
 
 function selectedResult() {
   return state.experiment.results.find((item) => item.id === state.selectedId) ?? state.experiment.results[0];
+}
+
+function currentResultFrom(experiment) {
+  return experiment.results.find((item) => item.id === "current") ?? experiment.results[0];
 }
 
 function renderCurrentResult() {
@@ -457,6 +477,239 @@ function renderPromptInspection() {
       ${unsafeFacts}
     </section>
   `;
+}
+
+function renderStrategyDiff() {
+  if (!el.strategyDiffPanel) return;
+  const diff = state.strategyDiff;
+  if (!diff) {
+    el.strategyDiffPanel.innerHTML = `
+      <section class="diff-card diff-empty">
+        <div>
+          <h4>전략 변경 diff</h4>
+          <p>같은 케이스에서 설정을 바꿔 다시 실행하면 변경점이 표시됩니다.</p>
+        </div>
+      </section>
+    `;
+    return;
+  }
+
+  const sectionItems = [
+    ...diff.sections.added.map((item) => sectionDiffItemHtml("added", item)),
+    ...diff.sections.removed.map((item) => sectionDiffItemHtml("removed", item)),
+    ...diff.sections.changed.map((item) => sectionDiffItemHtml("changed", item)),
+  ].join("");
+
+  el.strategyDiffPanel.innerHTML = `
+    <section class="diff-card">
+      <div class="diff-head">
+        <div>
+          <h4>전략 변경 diff</h4>
+          <p>직전 현재 설정 실행과 이번 현재 설정 실행을 비교합니다.</p>
+        </div>
+        <span class="diff-run-chip">${diff.hasChanges ? "변경 감지" : "동일 실행"}</span>
+      </div>
+      <div class="diff-layout">
+        <div class="diff-column">
+          <h5>변경된 설정</h5>
+          <div class="diff-change-list">
+            ${
+              diff.settings.length
+                ? diff.settings.map(settingDiffHtml).join("")
+                : `<div class="diff-muted">변경된 설정이 없습니다.</div>`
+            }
+          </div>
+        </div>
+        <div class="diff-column">
+          <h5>프롬프트 구성 변화</h5>
+          <div class="diff-change-list">
+            ${sectionItems || `<div class="diff-muted">section 추가, 제거, 내용 변경이 없습니다.</div>`}
+          </div>
+        </div>
+      </div>
+      <div class="diff-metric-grid">
+        ${diff.metrics.map(metricDiffHtml).join("")}
+      </div>
+      <div class="diff-issue-grid">
+        ${issueDiffHtml("지켜야 했던 것", diff.issues.missing, "새로 누락", "해결")}
+        ${issueDiffHtml("노출되면 안 되는 것", diff.issues.unsafe, "새로 노출", "차단됨")}
+        ${issueDiffHtml("특이점 / 경고", diff.issues.warnings, "새 경고", "해결")}
+      </div>
+    </section>
+  `;
+}
+
+function buildStrategyDiff(before, after) {
+  const settings = settingDiffs(before, after);
+  const sections = sectionDiffs(before.sections, after.sections);
+  const metrics = metricDiffs(before, after);
+  const issues = {
+    missing: arrayDiff(before.missing, after.missing),
+    unsafe: arrayDiff(before.unsafe, after.unsafe),
+    warnings: arrayDiff(before.warnings, after.warnings),
+  };
+  const hasIssueChanges = Object.values(issues).some((item) => item.added.length || item.removed.length);
+  return {
+    settings,
+    sections,
+    metrics,
+    issues,
+    hasChanges:
+      settings.length ||
+      sections.added.length ||
+      sections.removed.length ||
+      sections.changed.length ||
+      metrics.some((item) => item.delta !== 0) ||
+      hasIssueChanges,
+  };
+}
+
+function settingDiffs(before, after) {
+  return [
+    ["실행 모드", modeLabel(before), modeLabel(after)],
+    ["최근 대화 유지", retentionLabel(before.settings.retentionTurns), retentionLabel(after.settings.retentionTurns)],
+    ["압축 전략", compressionLabels[before.settings.compression], compressionLabels[after.settings.compression]],
+    ["검색 근거", retrievalLabels[before.settings.retrieval], retrievalLabels[after.settings.retrieval]],
+    ["KV 캐시", kvLabels[before.settings.kvCache], kvLabels[after.settings.kvCache]],
+    ["최대 입력 token", `${before.maxInputTokens}t`, `${after.maxInputTokens}t`],
+    ["응답 예약 token", `${before.reservedOutputTokens}t`, `${after.reservedOutputTokens}t`],
+  ]
+    .filter(([, beforeValue, afterValue]) => beforeValue !== afterValue)
+    .map(([label, beforeValue, afterValue]) => ({ label, beforeValue, afterValue }));
+}
+
+function sectionDiffs(beforeSections, afterSections) {
+  const beforeMap = new Map(beforeSections.map((section) => [sectionKey(section), section]));
+  const afterMap = new Map(afterSections.map((section) => [sectionKey(section), section]));
+  const added = [];
+  const removed = [];
+  const changed = [];
+
+  for (const [key, section] of afterMap) {
+    const previous = beforeMap.get(key);
+    if (!previous) {
+      added.push(section);
+    } else if (normalizeDiffText(previous.content) !== normalizeDiffText(section.content) || previous.tokens !== section.tokens) {
+      changed.push({ ...section, beforeTokens: previous.tokens, afterTokens: section.tokens });
+    }
+  }
+  for (const [key, section] of beforeMap) {
+    if (!afterMap.has(key)) removed.push(section);
+  }
+  return { added, removed, changed };
+}
+
+function metricDiffs(before, after) {
+  return [
+    ["입력 token", before.tokens, after.tokens, "t"],
+    ["청구 대상 token", billableMetric(before), billableMetric(after), "t"],
+    ["KV cache", before.cachedTokens, after.cachedTokens, "t"],
+    ["품질 점수", before.qualityScore, after.qualityScore, ""],
+    ["지연 시간", before.latencyMs, after.latencyMs, "ms"],
+    ["예산 사용률", before.tokenUtilization, after.tokenUtilization, "%"],
+  ].map(([label, beforeValue, afterValue, suffix]) => ({
+    label,
+    beforeValue,
+    afterValue,
+    suffix,
+    delta: Number(afterValue) - Number(beforeValue),
+  }));
+}
+
+function settingDiffHtml(item) {
+  return `
+    <div class="diff-change">
+      <span>${escapeHtml(item.label)}</span>
+      <strong><b>${escapeHtml(item.beforeValue)}</b><i>→</i><b>${escapeHtml(item.afterValue)}</b></strong>
+    </div>
+  `;
+}
+
+function sectionDiffItemHtml(kind, item) {
+  const labels = {
+    added: "추가",
+    removed: "제거",
+    changed: "변경",
+  };
+  const tokenText =
+    kind === "changed"
+      ? `${item.beforeTokens}t → ${item.afterTokens}t`
+      : `${kind === "added" ? "+" : "-"}${item.tokens}t`;
+  return `
+    <div class="diff-section-item ${kind}">
+      <span>${labels[kind]}</span>
+      <strong>[${escapeHtml(item.label)}]</strong>
+      <p>${escapeHtml(tokenText)} · 출처=${escapeHtml(item.source)}</p>
+    </div>
+  `;
+}
+
+function metricDiffHtml(item) {
+  const tone = item.delta > 0 ? "increase" : item.delta < 0 ? "decrease" : "neutral";
+  return `
+    <div class="diff-metric ${tone}">
+      <span>${escapeHtml(item.label)}</span>
+      <strong>${escapeHtml(formatMetricValue(item.afterValue, item.suffix))}</strong>
+      <p>${escapeHtml(formatMetricValue(item.beforeValue, item.suffix))} 대비 ${escapeHtml(formatDelta(item.delta, item.suffix))}</p>
+    </div>
+  `;
+}
+
+function issueDiffHtml(title, diff, addedLabel, removedLabel) {
+  const items = [
+    ...diff.added.map((item) => `<span class="diff-tag bad">${escapeHtml(addedLabel)} · ${escapeHtml(item)}</span>`),
+    ...diff.removed.map((item) => `<span class="diff-tag good">${escapeHtml(removedLabel)} · ${escapeHtml(item)}</span>`),
+  ].join("");
+  return `
+    <section class="diff-issue">
+      <h5>${escapeHtml(title)}</h5>
+      <div>${items || `<span class="diff-tag neutral">변화 없음</span>`}</div>
+    </section>
+  `;
+}
+
+function arrayDiff(beforeItems, afterItems) {
+  const beforeSet = new Set(beforeItems);
+  const afterSet = new Set(afterItems);
+  return {
+    added: afterItems.filter((item) => !beforeSet.has(item)),
+    removed: beforeItems.filter((item) => !afterSet.has(item)),
+  };
+}
+
+function sectionKey(section) {
+  return `${section.label}::${section.source}`;
+}
+
+function billableMetric(result) {
+  return result.actualTotalTokens ?? result.billableTokens ?? result.tokens;
+}
+
+function experimentFingerprint() {
+  return JSON.stringify({
+    caseId: state.caseId,
+    prompt: normalizeDiffText(el.promptInput.value),
+  });
+}
+
+function cloneForDiff(result) {
+  return JSON.parse(JSON.stringify(result));
+}
+
+function normalizeDiffText(value) {
+  return String(value ?? "").replace(/\r\n/g, "\n").trim();
+}
+
+function formatMetricValue(value, suffix) {
+  const number = Number(value);
+  const formatted = Number.isInteger(number) ? String(number) : number.toFixed(1).replace(/\.0$/, "");
+  return suffix ? `${formatted}${suffix}` : formatted;
+}
+
+function formatDelta(delta, suffix) {
+  if (delta === 0) return suffix ? `0${suffix}` : "0";
+  const sign = delta > 0 ? "+" : "";
+  return `${sign}${formatMetricValue(delta, suffix)}`;
 }
 
 function markedApiPromptHtml(result) {
