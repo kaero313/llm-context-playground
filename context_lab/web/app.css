@@ -873,6 +873,239 @@ textarea:focus {
   line-height: 1.65;
 }
 
+.strategy-diff-panel {
+  margin-top: 16px;
+}
+
+.diff-card {
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--outline-variant);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 16px;
+}
+
+.diff-card.diff-empty {
+  min-height: 96px;
+  align-items: center;
+}
+
+.diff-card h4,
+.diff-card h5 {
+  margin: 0;
+  color: var(--text);
+}
+
+.diff-card h4 {
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.diff-card h5 {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.diff-card p,
+.diff-muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.diff-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--outline-variant);
+}
+
+.diff-run-chip,
+.diff-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border: 1px solid var(--outline-variant);
+  border-radius: 8px;
+  background: var(--surface-high);
+  color: var(--muted);
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.diff-run-chip {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.diff-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 14px;
+}
+
+.diff-column,
+.diff-issue {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.diff-change-list {
+  display: grid;
+  gap: 8px;
+}
+
+.diff-change,
+.diff-section-item,
+.diff-metric {
+  min-width: 0;
+  border: 1px solid var(--outline-variant);
+  border-radius: 8px;
+  background: var(--surface-mid);
+  padding: 11px;
+}
+
+.diff-change {
+  display: grid;
+  gap: 8px;
+}
+
+.diff-change span,
+.diff-section-item span,
+.diff-metric span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.diff-change strong {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.diff-change b {
+  font-weight: 700;
+}
+
+.diff-change i {
+  color: var(--primary);
+  font-style: normal;
+}
+
+.diff-section-item {
+  display: grid;
+  gap: 6px;
+}
+
+.diff-section-item.added {
+  border-color: var(--primary);
+}
+
+.diff-section-item.removed {
+  border-color: var(--outline);
+}
+
+.diff-section-item.changed {
+  border-color: var(--tertiary-strong);
+}
+
+.diff-section-item.added span,
+.diff-section-item.added strong {
+  color: var(--primary);
+}
+
+.diff-section-item.changed span,
+.diff-section-item.changed strong {
+  color: var(--tertiary);
+}
+
+.diff-section-item strong {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.diff-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.diff-metric {
+  display: grid;
+  gap: 8px;
+  min-height: 108px;
+}
+
+.diff-metric strong {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.diff-metric.increase strong {
+  color: var(--tertiary);
+}
+
+.diff-metric.decrease strong {
+  color: var(--primary);
+}
+
+.diff-metric p {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.diff-issue-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.diff-issue {
+  border: 1px solid var(--outline-variant);
+  border-radius: 8px;
+  background: var(--surface-mid);
+  padding: 12px;
+}
+
+.diff-issue > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.diff-tag.good {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.diff-tag.bad {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.diff-tag.neutral {
+  color: var(--muted);
+}
+
 .requirement-list {
   display: grid;
   gap: 16px;
@@ -1691,9 +1924,15 @@ tr:last-child td {
   .concept-grid,
   .conclusion-grid,
   .controls-grid,
+  .diff-layout,
+  .diff-issue-grid,
   .prompt-grid,
   .learning-controls-grid {
     grid-template-columns: 1fr;
+  }
+
+  .diff-metric-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .learning-actions,
@@ -1762,6 +2001,10 @@ tr:last-child td {
     flex-wrap: wrap;
   }
 
+  .diff-head {
+    flex-direction: column;
+  }
+
   .tab-view {
     overflow: visible;
     padding: 20px;
@@ -1776,6 +2019,10 @@ tr:last-child td {
   }
 
   .mini-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .diff-metric-grid {
     grid-template-columns: 1fr;
   }
 
