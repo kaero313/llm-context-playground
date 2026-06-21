@@ -1356,6 +1356,105 @@ textarea:focus {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.history-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.history-empty,
+.history-card {
+  min-width: 0;
+  border: 1px solid var(--outline-variant);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 14px;
+}
+
+.history-empty {
+  display: grid;
+  gap: 7px;
+}
+
+.history-empty strong {
+  color: var(--text);
+}
+
+.history-empty p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.history-card {
+  display: grid;
+  gap: 12px;
+  color: var(--text);
+  text-align: left;
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.history-card:hover,
+.history-card.active {
+  border-color: var(--primary);
+  background: var(--surface-mid);
+}
+
+.history-card:active {
+  transform: scale(0.995);
+}
+
+.history-card-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.history-card-head span,
+.history-metrics {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.history-card-head strong {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.history-card p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.history-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.history-metrics {
+  display: grid;
+  gap: 5px;
+}
+
+.history-metrics span {
+  overflow-wrap: anywhere;
+}
+
 .capture-ready {
   scroll-margin-top: 24px;
 }
@@ -1954,6 +2053,10 @@ tr:last-child td {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .history-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .guide-layout {
     grid-template-columns: 1fr;
   }
@@ -2027,6 +2130,14 @@ tr:last-child td {
   }
 
   .guidance-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .history-actions {
+    justify-content: flex-start;
+  }
+
+  .history-list {
     grid-template-columns: 1fr;
   }
 
