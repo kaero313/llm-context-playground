@@ -1,3 +1,6 @@
+const HISTORY_STORAGE_KEY = "llm-context-playground.experiment-history.v1";
+const HISTORY_LIMIT = 12;
+
 const state = {
   options: null,
   experiment: null,
@@ -7,6 +10,8 @@ const state = {
   selectedId: "current",
   lastRunSnapshot: null,
   strategyDiff: null,
+  history: [],
+  activeHistoryId: null,
 };
 
 const tabMeta = {
@@ -86,6 +91,9 @@ const el = {
   apiPromptPreview: document.querySelector("#apiPromptPreview"),
   strategyDiffPanel: document.querySelector("#strategyDiffPanel"),
   answerRequirementStatus: document.querySelector("#answerRequirementStatus"),
+  historyCount: document.querySelector("#historyCount"),
+  experimentHistoryList: document.querySelector("#experimentHistoryList"),
+  clearHistoryButton: document.querySelector("#clearHistoryButton"),
   comparisonCards: document.querySelector("#comparisonCards"),
   qualityChart: document.querySelector("#qualityChart"),
   costChart: document.querySelector("#costChart"),
@@ -101,12 +109,14 @@ const el = {
 
 async function init() {
   state.options = await fetchJson("/api/options");
+  state.history = loadExperimentHistory();
   configureModeControls();
   renderTabs();
   renderCaseOptions();
+  renderHistory();
   await loadCase();
   updateModeNotice();
-  await runExperiment();
+  await runExperiment({ saveToHistory: false });
 }
 
 function configureModeControls() {
@@ -183,11 +193,11 @@ function renderCaseOptions() {
   el.caseSelect.value = state.caseId;
 }
 
-async function loadCase() {
+async function loadCase(options = {}) {
   state.caseId = el.caseSelect.value;
   const data = await fetchJson(`/api/case?case=${encodeURIComponent(state.caseId)}`);
   state.defaultPrompt = data.userTurn;
-  el.promptInput.value = data.userTurn;
+  el.promptInput.value = options.promptOverride ?? data.userTurn;
   el.caseNotes.textContent = data.notes;
   el.caseStatus.textContent = caseLabel(state.caseId);
   renderChecklist(data.expected, data.unsafe);
@@ -254,7 +264,8 @@ function renderCaseGuide(guide) {
   `;
 }
 
-async function runExperiment() {
+async function runExperiment(options = {}) {
+  const { saveToHistory = true } = options;
   normalizeBudgetInputs();
   updateModeNotice();
   if (el.modelMode.value === "openai" && !state.options.openai?.enabled) {
@@ -295,6 +306,10 @@ async function runExperiment() {
       fingerprint: nextFingerprint,
       result: cloneForDiff(current),
     };
+    state.activeHistoryId = null;
+    if (saveToHistory) {
+      saveHistoryRecord(experiment, state.strategyDiff);
+    }
     renderAll();
   } catch (error) {
     renderError(error.message);
@@ -321,6 +336,7 @@ function renderAll() {
   renderFinalConclusion();
   renderComparison();
   renderContextAnalysis();
+  renderHistory();
 }
 
 function selectedResult() {
@@ -329,6 +345,169 @@ function selectedResult() {
 
 function currentResultFrom(experiment) {
   return experiment.results.find((item) => item.id === "current") ?? experiment.results[0];
+}
+
+function loadExperimentHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((item) => item?.id && item?.experiment).slice(0, HISTORY_LIMIT) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistExperimentHistory() {
+  try {
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(state.history.slice(0, HISTORY_LIMIT)));
+  } catch {
+    while (state.history.length > 4) {
+      state.history.pop();
+      try {
+        localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(state.history));
+        return;
+      } catch {
+        // Keep shrinking until storage accepts the payload.
+      }
+    }
+  }
+}
+
+function saveHistoryRecord(experiment, strategyDiff) {
+  const record = createHistoryRecord(experiment, strategyDiff);
+  const existingIndex = state.history.findIndex((item) => item.signature === record.signature);
+  if (existingIndex >= 0) {
+    state.history.splice(existingIndex, 1);
+  }
+  state.history.unshift(record);
+  state.history = state.history.slice(0, HISTORY_LIMIT);
+  state.activeHistoryId = record.id;
+  persistExperimentHistory();
+}
+
+function createHistoryRecord(experiment, strategyDiff) {
+  const current = currentResultFrom(experiment);
+  const settings = experiment.settings;
+  const savedAt = new Date().toISOString();
+  const prompt = el.promptInput.value;
+  return {
+    id: `history-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    signature: historySignature(experiment, strategyDiff, prompt),
+    savedAt,
+    caseId: state.caseId,
+    caseLabel: caseLabel(state.caseId),
+    prompt,
+    selectedId: state.selectedId,
+    settings: cloneForDiff(settings),
+    strategyDiff: strategyDiff ? cloneForDiff(strategyDiff) : null,
+    experiment: cloneForDiff(experiment),
+    summary: {
+      name: current.name,
+      mode: modeLabel(current),
+      compression: compressionLabels[current.settings.compression],
+      retrieval: retrievalLabels[current.settings.retrieval],
+      kvCache: kvLabels[current.settings.kvCache],
+      retention: retentionLabel(current.settings.retentionTurns),
+      tokens: current.tokens,
+      cachedTokens: current.cachedTokens,
+      qualityScore: current.qualityScore,
+      passed: current.passed,
+      issue: issueSummary(current),
+    },
+  };
+}
+
+function historySignature(experiment, strategyDiff, prompt) {
+  const current = currentResultFrom(experiment);
+  return JSON.stringify({
+    caseId: state.caseId,
+    prompt: normalizeDiffText(prompt),
+    settings: experiment.settings,
+    resultSettings: current.settings,
+    mode: current.mode,
+    diff: strategyDiff ? Boolean(strategyDiff.hasChanges) : false,
+  });
+}
+
+function renderHistory() {
+  if (!el.experimentHistoryList) return;
+  const count = state.history.length;
+  el.historyCount.textContent = `${count}개 기록`;
+  el.clearHistoryButton.disabled = count === 0;
+
+  if (!count) {
+    el.experimentHistoryList.innerHTML = `
+      <div class="history-empty">
+        <strong>저장된 실험이 없습니다.</strong>
+        <p>설정을 바꿔 실행하면 프롬프트, 응답, 평가, 결론이 여기에 저장됩니다.</p>
+      </div>
+    `;
+    return;
+  }
+
+  el.experimentHistoryList.innerHTML = state.history.map(historyCardHtml).join("");
+  for (const button of el.experimentHistoryList.querySelectorAll("[data-history-id]")) {
+    button.addEventListener("click", () => {
+      openHistoryRecord(button.dataset.historyId);
+    });
+  }
+}
+
+function historyCardHtml(record) {
+  const summary = record.summary;
+  const isActive = record.id === state.activeHistoryId;
+  const diffLabel = record.strategyDiff?.hasChanges ? "diff 있음" : "기준 실행";
+  return `
+    <button class="history-card ${isActive ? "active" : ""}" type="button" data-history-id="${escapeHtml(record.id)}">
+      <div class="history-card-head">
+        <span>${escapeHtml(formatHistoryTime(record.savedAt))}</span>
+        <strong>${escapeHtml(record.caseLabel)}</strong>
+      </div>
+      <p>${escapeHtml(truncateText(record.prompt, 92))}</p>
+      <div class="history-chip-row">
+        <span class="small-chip">${escapeHtml(summary.mode)}</span>
+        <span class="small-chip">${escapeHtml(summary.retention)}</span>
+        <span class="small-chip">${escapeHtml(summary.compression)}</span>
+        <span class="small-chip">${escapeHtml(summary.retrieval)}</span>
+        <span class="small-chip">${escapeHtml(diffLabel)}</span>
+      </div>
+      <div class="history-metrics">
+        <span>품질 ${summary.qualityScore}</span>
+        <span>${summary.tokens}t · cache ${summary.cachedTokens}t</span>
+        <span>${summary.passed ? "통과" : `확인 필요: ${escapeHtml(summary.issue)}`}</span>
+      </div>
+    </button>
+  `;
+}
+
+async function openHistoryRecord(recordId) {
+  const record = state.history.find((item) => item.id === recordId);
+  if (!record) return;
+  state.activeHistoryId = record.id;
+  state.caseId = record.caseId;
+  el.caseSelect.value = record.caseId;
+  await loadCase({ promptOverride: record.prompt });
+  applyExperimentSettings(record.settings);
+  state.experiment = cloneForDiff(record.experiment);
+  state.selectedId = record.selectedId || state.experiment.selectedId;
+  state.strategyDiff = record.strategyDiff ? cloneForDiff(record.strategyDiff) : null;
+  state.lastRunSnapshot = {
+    fingerprint: experimentFingerprint(),
+    result: cloneForDiff(currentResultFrom(state.experiment)),
+  };
+  updateModeNotice();
+  renderAll();
+}
+
+function applyExperimentSettings(settings) {
+  el.modelMode.value = settings.mode ?? "mock";
+  el.liveScope.value = settings.liveVariants ?? "current";
+  el.retentionTurns.value = String(settings.retentionTurns ?? 4);
+  el.compressionMode.value = settings.compression ?? "hybrid";
+  el.retrievalMode.value = settings.retrieval ?? "on";
+  el.kvCacheMode.value = settings.kvCache ?? "static";
+  el.maxTokens.value = String(settings.maxInputTokens ?? 900);
+  el.reservedTokens.value = String(settings.reservedOutputTokens ?? 200);
 }
 
 function renderCurrentResult() {
@@ -712,6 +891,22 @@ function formatDelta(delta, suffix) {
   return `${sign}${formatMetricValue(delta, suffix)}`;
 }
 
+function formatHistoryTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "시간 정보 없음";
+  return new Intl.DateTimeFormat("ko-KR", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function truncateText(value, maxLength) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}...` : text;
+}
+
 function markedApiPromptHtml(result) {
   return result.sections.map((section) => {
     const isUserInput = section.label === "현재 사용자 질문";
@@ -958,6 +1153,12 @@ el.modelMode.addEventListener("change", () => {
 });
 el.liveScope.addEventListener("change", updateModeNotice);
 el.runButton.addEventListener("click", runExperiment);
+el.clearHistoryButton.addEventListener("click", () => {
+  state.history = [];
+  state.activeHistoryId = null;
+  persistExperimentHistory();
+  renderHistory();
+});
 el.resetBudgetButton.addEventListener("click", () => {
   el.retentionTurns.value = "4";
   el.compressionMode.value = "hybrid";
