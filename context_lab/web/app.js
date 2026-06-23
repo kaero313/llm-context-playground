@@ -12,6 +12,7 @@ const state = {
   strategyDiff: null,
   history: [],
   activeHistoryId: null,
+  activeReportRecord: null,
 };
 
 const tabMeta = {
@@ -94,6 +95,10 @@ const el = {
   historyCount: document.querySelector("#historyCount"),
   experimentHistoryList: document.querySelector("#experimentHistoryList"),
   clearHistoryButton: document.querySelector("#clearHistoryButton"),
+  reportView: document.querySelector("#reportView"),
+  reportContent: document.querySelector("#reportContent"),
+  closeReportButton: document.querySelector("#closeReportButton"),
+  printReportButton: document.querySelector("#printReportButton"),
   comparisonCards: document.querySelector("#comparisonCards"),
   qualityChart: document.querySelector("#qualityChart"),
   costChart: document.querySelector("#costChart"),
@@ -446,9 +451,14 @@ function renderHistory() {
   }
 
   el.experimentHistoryList.innerHTML = state.history.map(historyCardHtml).join("");
-  for (const button of el.experimentHistoryList.querySelectorAll("[data-history-id]")) {
+  for (const button of el.experimentHistoryList.querySelectorAll("[data-history-open-id]")) {
     button.addEventListener("click", () => {
-      openHistoryRecord(button.dataset.historyId);
+      openHistoryRecord(button.dataset.historyOpenId);
+    });
+  }
+  for (const button of el.experimentHistoryList.querySelectorAll("[data-report-id]")) {
+    button.addEventListener("click", () => {
+      openReport(button.dataset.reportId);
     });
   }
 }
@@ -458,25 +468,28 @@ function historyCardHtml(record) {
   const isActive = record.id === state.activeHistoryId;
   const diffLabel = record.strategyDiff?.hasChanges ? "diff 있음" : "기준 실행";
   return `
-    <button class="history-card ${isActive ? "active" : ""}" type="button" data-history-id="${escapeHtml(record.id)}">
-      <div class="history-card-head">
-        <span>${escapeHtml(formatHistoryTime(record.savedAt))}</span>
-        <strong>${escapeHtml(record.caseLabel)}</strong>
-      </div>
-      <p>${escapeHtml(truncateText(record.prompt, 92))}</p>
-      <div class="history-chip-row">
-        <span class="small-chip">${escapeHtml(summary.mode)}</span>
-        <span class="small-chip">${escapeHtml(summary.retention)}</span>
-        <span class="small-chip">${escapeHtml(summary.compression)}</span>
-        <span class="small-chip">${escapeHtml(summary.retrieval)}</span>
-        <span class="small-chip">${escapeHtml(diffLabel)}</span>
-      </div>
-      <div class="history-metrics">
-        <span>품질 ${summary.qualityScore}</span>
-        <span>${summary.tokens}t · cache ${summary.cachedTokens}t</span>
-        <span>${summary.passed ? "통과" : `확인 필요: ${escapeHtml(summary.issue)}`}</span>
-      </div>
-    </button>
+    <article class="history-card ${isActive ? "active" : ""}">
+      <button class="history-card-main" type="button" data-history-open-id="${escapeHtml(record.id)}">
+        <div class="history-card-head">
+          <span>${escapeHtml(formatHistoryTime(record.savedAt))}</span>
+          <strong>${escapeHtml(record.caseLabel)}</strong>
+        </div>
+        <p>${escapeHtml(truncateText(record.prompt, 92))}</p>
+        <div class="history-chip-row">
+          <span class="small-chip">${escapeHtml(summary.mode)}</span>
+          <span class="small-chip">${escapeHtml(summary.retention)}</span>
+          <span class="small-chip">${escapeHtml(summary.compression)}</span>
+          <span class="small-chip">${escapeHtml(summary.retrieval)}</span>
+          <span class="small-chip">${escapeHtml(diffLabel)}</span>
+        </div>
+        <div class="history-metrics">
+          <span>품질 ${summary.qualityScore}</span>
+          <span>${summary.tokens}t · cache ${summary.cachedTokens}t</span>
+          <span>${summary.passed ? "통과" : `확인 필요: ${escapeHtml(summary.issue)}`}</span>
+        </div>
+      </button>
+      <button class="history-report-button" type="button" data-report-id="${escapeHtml(record.id)}">리포트 보기</button>
+    </article>
   `;
 }
 
@@ -508,6 +521,170 @@ function applyExperimentSettings(settings) {
   el.kvCacheMode.value = settings.kvCache ?? "static";
   el.maxTokens.value = String(settings.maxInputTokens ?? 900);
   el.reservedTokens.value = String(settings.reservedOutputTokens ?? 200);
+}
+
+function openReport(recordId) {
+  const record = state.history.find((item) => item.id === recordId);
+  if (!record) return;
+  state.activeReportRecord = cloneForDiff(record);
+  renderReport(state.activeReportRecord);
+  document.body.classList.add("report-mode");
+  el.reportView.setAttribute("aria-hidden", "false");
+  el.reportView.scrollTop = 0;
+}
+
+function closeReport() {
+  state.activeReportRecord = null;
+  document.body.classList.remove("report-mode");
+  el.reportView.setAttribute("aria-hidden", "true");
+}
+
+function renderReport(record) {
+  const result = historyResult(record);
+  const experiment = record.experiment;
+  const outcome = conclusionOutcome(result);
+  const diff = record.strategyDiff;
+  el.reportContent.innerHTML = `
+    <header class="report-hero">
+      <div>
+        <p class="report-kicker">Experiment Report</p>
+        <h1>${escapeHtml(record.caseLabel)} 실험 리포트</h1>
+        <p>${escapeHtml(formatHistoryTime(record.savedAt))} 저장 · ${escapeHtml(modeLabel(result))} · ${escapeHtml(result.name)}</p>
+      </div>
+      <div class="report-hero-badges">
+        <span class="status-chip">${escapeHtml(outcome.label)}</span>
+        <span class="status-chip">${escapeHtml(result.tokens)} token</span>
+        <span class="status-chip">cache ${escapeHtml(result.cachedTokens)} token</span>
+      </div>
+    </header>
+
+    <section class="report-summary-grid">
+      ${reportMetric("품질 점수", result.qualityScore)}
+      ${reportMetric("실제 API token", actualTokenText(result))}
+      ${reportMetric("예산 사용률", `${result.tokenUtilization}%`)}
+      ${reportMetric("지연 시간", `${result.latencyMs} ms`)}
+    </section>
+
+    <section class="report-section">
+      <div class="report-section-head">
+        <span>01</span>
+        <h2>사용자 프롬프트</h2>
+      </div>
+      <pre class="report-code">${escapeHtml(record.prompt)}</pre>
+    </section>
+
+    <section class="report-section">
+      <div class="report-section-head">
+        <span>02</span>
+        <h2>맥락 전략 설정</h2>
+      </div>
+      <div class="report-settings-grid">
+        ${reportSettingItems(record, result).map(reportSettingHtml).join("")}
+      </div>
+    </section>
+
+    <section class="report-section">
+      <div class="report-section-head">
+        <span>03</span>
+        <h2>API 호출 입력 프롬프트</h2>
+      </div>
+      <div class="report-api-prompt">${markedApiPromptHtml(result)}</div>
+    </section>
+
+    <section class="report-section">
+      <div class="report-section-head">
+        <span>04</span>
+        <h2>LLM 리턴 결과</h2>
+      </div>
+      <pre class="report-code">${escapeHtml(localizeAnswer(result.answer, result.mode))}</pre>
+      <p class="report-note">${escapeHtml(result.lesson)}</p>
+    </section>
+
+    <section class="report-section">
+      <div class="report-section-head">
+        <span>05</span>
+        <h2>결과 평가</h2>
+      </div>
+      <div class="requirement-list report-requirements">
+        ${reportRequirementHtml("반드시 유지", experiment.expectedFacts, result.missing, "확인 필요", "유지됨")}
+        ${reportRequirementHtml("노출 금지", experiment.unsafeFacts, result.unsafe, "노출됨", "차단됨", "민감 정보 없음")}
+      </div>
+    </section>
+
+    <section class="report-section">
+      <div class="report-section-head">
+        <span>06</span>
+        <h2>전략 변경 diff</h2>
+      </div>
+      ${strategyDiffCardHtml(diff, "저장된 diff가 없습니다. 첫 기준 실행이거나 같은 조건에서 생성된 기록입니다.", "저장 당시 직전 실행과 현재 실행을 비교한 결과입니다.")}
+    </section>
+
+    <section class="report-section">
+      <div class="report-section-head">
+        <span>07</span>
+        <h2>최종 결론</h2>
+      </div>
+      <div class="conclusion-status ${outcome.tone}">
+        <span>원했던 결과</span>
+        <strong>${escapeHtml(outcome.label)}</strong>
+        <p>${escapeHtml(outcome.description)}</p>
+      </div>
+      <section class="conclusion-notes report-conclusion-notes">
+        <h4>특이점</h4>
+        <ul>${conclusionInsights(result).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+      </section>
+    </section>
+  `;
+}
+
+function historyResult(record) {
+  return record.experiment.results.find((item) => item.id === record.selectedId) ?? currentResultFrom(record.experiment);
+}
+
+function reportMetric(label, value) {
+  return `<article class="report-metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`;
+}
+
+function reportSettingItems(record, result) {
+  const settings = record.settings || {};
+  return [
+    ["학습 케이스", record.caseLabel],
+    ["실행 모드", modeLabel(result)],
+    ["Live API 범위", settings.liveVariants === "all" ? "비교 후보 전체 호출" : "현재 설정만 호출"],
+    ["최근 대화 유지", retentionLabel(result.settings.retentionTurns)],
+    ["압축 전략", compressionLabels[result.settings.compression]],
+    ["검색 근거", retrievalLabels[result.settings.retrieval]],
+    ["KV 캐시", kvLabels[result.settings.kvCache]],
+    ["최대 입력 token", `${settings.maxInputTokens ?? result.maxInputTokens} token`],
+    ["응답 예약 token", `${settings.reservedOutputTokens ?? result.reservedOutputTokens} token`],
+  ];
+}
+
+function reportSettingHtml([label, value]) {
+  return `
+    <div class="report-setting">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>
+  `;
+}
+
+function reportRequirementHtml(title, facts, issues, badLabel, okLabel, emptyText = null) {
+  const list = facts.length ? facts : emptyText ? [emptyText] : [];
+  return `
+    <section>
+      <h4>${escapeHtml(title)}</h4>
+      ${list.map((fact) => {
+        const bad = issues.includes(fact);
+        return `
+          <div class="${bad ? "bad" : "ok"}">
+            <span>${escapeHtml(bad ? badLabel : okLabel)}</span>
+            <strong>${escapeHtml(fact)}</strong>
+          </div>
+        `;
+      }).join("")}
+    </section>
+  `;
 }
 
 function renderCurrentResult() {
@@ -660,31 +837,36 @@ function renderPromptInspection() {
 
 function renderStrategyDiff() {
   if (!el.strategyDiffPanel) return;
-  const diff = state.strategyDiff;
+  el.strategyDiffPanel.innerHTML = strategyDiffCardHtml(
+    state.strategyDiff,
+    "같은 케이스에서 설정을 바꿔 다시 실행하면 변경점이 표시됩니다.",
+    "직전 현재 설정 실행과 이번 현재 설정 실행을 비교합니다.",
+  );
+}
+
+function strategyDiffCardHtml(diff, emptyText, introText) {
   if (!diff) {
-    el.strategyDiffPanel.innerHTML = `
+    return `
       <section class="diff-card diff-empty">
         <div>
           <h4>전략 변경 diff</h4>
-          <p>같은 케이스에서 설정을 바꿔 다시 실행하면 변경점이 표시됩니다.</p>
+          <p>${escapeHtml(emptyText)}</p>
         </div>
       </section>
     `;
-    return;
   }
-
   const sectionItems = [
     ...diff.sections.added.map((item) => sectionDiffItemHtml("added", item)),
     ...diff.sections.removed.map((item) => sectionDiffItemHtml("removed", item)),
     ...diff.sections.changed.map((item) => sectionDiffItemHtml("changed", item)),
   ].join("");
 
-  el.strategyDiffPanel.innerHTML = `
+  return `
     <section class="diff-card">
       <div class="diff-head">
         <div>
           <h4>전략 변경 diff</h4>
-          <p>직전 현재 설정 실행과 이번 현재 설정 실행을 비교합니다.</p>
+          <p>${escapeHtml(introText)}</p>
         </div>
         <span class="diff-run-chip">${diff.hasChanges ? "변경 감지" : "동일 실행"}</span>
       </div>
@@ -1156,8 +1338,13 @@ el.runButton.addEventListener("click", runExperiment);
 el.clearHistoryButton.addEventListener("click", () => {
   state.history = [];
   state.activeHistoryId = null;
+  closeReport();
   persistExperimentHistory();
   renderHistory();
+});
+el.closeReportButton.addEventListener("click", closeReport);
+el.printReportButton.addEventListener("click", () => {
+  window.print();
 });
 el.resetBudgetButton.addEventListener("click", () => {
   el.retentionTurns.value = "4";
